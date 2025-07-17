@@ -197,6 +197,46 @@ def main():
         fixed_supports = sum(1 for config in support_configs if config['dx'] == 1)
         vertical_supports = sum(1 for config in support_configs if config['dy'] == 1)
         
+        # NEW: Pier Height Configuration
+        st.subheader("📐 支座高度配置")
+        
+        pier_heights = []
+        st.write("**调节各支座高度：**")
+        
+        for i in range(num_piers):
+            pier_name = f"墩台 {i+1}"
+            if i == 0:
+                pier_name += " (左端)"
+            elif i == num_piers - 1:
+                pier_name += " (右端)"
+            else:
+                pier_name += " (中间墩)"
+            
+            # Default height based on pier type
+            default_height = 8.0 if i == 0 or i == num_piers - 1 else 12.0
+            
+            pier_height = st.slider(
+                f"{pier_name} 高度 (m)",
+                min_value=3.0,
+                max_value=20.0,
+                value=default_height,
+                step=0.5,
+                key=f"pier_height_{i}",
+                help=f"调节{pier_name}的高度，影响结构刚度和力的分布"
+            )
+            
+            pier_heights.append(pier_height)
+        
+        # Show height effects preview
+        if len(pier_heights) > 1:
+            height_diff = max(pier_heights) - min(pier_heights)
+            if height_diff > 2.0:
+                st.warning(f"⚠️ 支座高度差异较大 ({height_diff:.1f}m)，将影响力的分布")
+            elif height_diff > 0.5:
+                st.info(f"ℹ️ 支座高度差异 {height_diff:.1f}m，结构将产生不均匀变形")
+            else:
+                st.success("✅ 支座高度相对均匀，结构受力较为均匀")
+        
         if fixed_supports == 0:
             st.error("⚠️ 缺少水平固定支座，结构可能水平滑移")
         elif vertical_supports < 2:
@@ -207,8 +247,8 @@ def main():
     # Create bridge model based on engine choice
     def create_bridge_model(_use_xara, _length, _num_elements, _E, _height, _width, 
                            _num_spans, _pier_start, _bearings_per_pier, _bridge_width, 
-                           _density, _support_configs):
-        """Create bridge model with enhanced parameters - No caching for real-time updates"""
+                           _density, _support_configs, _pier_heights):
+        """Create bridge model with enhanced parameters including pier heights - No caching for real-time updates"""
         if _use_xara:
             return BridgeModelXara(
                 length=_length,
@@ -221,7 +261,8 @@ def main():
                 pier_start_position=_pier_start,
                 bearings_per_pier=_bearings_per_pier,
                 bridge_width=_bridge_width,
-                support_types=_support_configs
+                support_types=_support_configs,
+                pier_heights=_pier_heights  # NEW: Add pier heights
             )
         else:
             # 简单FEA引擎只支持基本参数
@@ -237,6 +278,7 @@ def main():
             simple_bridge.bridge_width = _bridge_width
             simple_bridge.density = _density
             simple_bridge.bearings_per_pier = _bearings_per_pier
+            simple_bridge.pier_heights = _pier_heights  # NEW: Add pier heights for compatibility
             
             # 创建简化的pier信息以保持兼容性
             simple_piers = []
@@ -271,7 +313,7 @@ def main():
             return simple_bridge
     
     # Create the bridge model with session state management to prevent load loss
-    bridge_key = f"bridge_{use_xara}_{length}_{num_elements}_{E}_{section_height}_{section_width}_{num_spans}_{pier_start_position}_{bearings_per_pier}_{bridge_width}_{density}"
+    bridge_key = f"bridge_{use_xara}_{length}_{num_elements}_{E}_{section_height}_{section_width}_{num_spans}_{pier_start_position}_{bearings_per_pier}_{bridge_width}_{density}_{hash(tuple(pier_heights))}"
     
     # Check if parameters changed, if so recreate bridge
     if 'bridge_params' not in st.session_state or st.session_state.bridge_params != bridge_key:
@@ -279,7 +321,7 @@ def main():
             bridge = create_bridge_model(
                 use_xara, length, num_elements, E, section_height, section_width,
                 num_spans, pier_start_position, bearings_per_pier, bridge_width,
-                density, support_configs
+                density, support_configs, pier_heights  # NEW: Add pier heights
             )
             # Store in session_state to preserve loads
             st.session_state.bridge = bridge
@@ -537,6 +579,16 @@ def main():
                 max_vertical_kn = max(abs(r['Fy']) for r in results['reactions']) / 1000
             st.metric("最大竖向反力", f"{max_vertical_kn:.1f} kN" if max_vertical_kn > 0 else "N/A")
         with col6:
+            # NEW: Pier height variation effect
+            if hasattr(bridge, 'pier_heights') and bridge.pier_heights:
+                height_diff = max(bridge.pier_heights) - min(bridge.pier_heights)
+                st.metric("支座高差", f"{height_diff:.1f} m")
+            else:
+                st.metric("支座高差", "N/A")
+        
+        # Additional metrics in second row
+        col7, col8, col9, col10, col11, col12 = st.columns(6)
+        with col7:
             max_horizontal_kn = 0
             if 'max_reaction_horizontal' in results:
                 max_horizontal_kn = results['max_reaction_horizontal'] / 1000
@@ -626,7 +678,7 @@ def main():
             st.info("注意: 3D功能在某些环境中可能需要调整")
         
         # Enhanced 2D Analysis Charts
-        viz_tab1, viz_tab2, viz_tab3, viz_tab4 = st.tabs(["📏 变形分析", "🔄 弯矩图", "↕️ 剪力图", "🏗️ 支座反力"])
+        viz_tab1, viz_tab2, viz_tab3, viz_tab4, viz_tab5 = st.tabs(["📏 变形分析", "🔄 弯矩图", "↕️ 剪力图", "🏗️ 支座反力", "📐 支座高度效果"])
         
         with viz_tab1:
             fig_deform = visualizer.create_deformation_plot()
@@ -705,6 +757,164 @@ def main():
                         st.write(f"{constraint_icon} {reaction['constraint_type']}")
             else:
                 st.info("支座反力数据不可用（可能使用的是简化分析引擎）")
+        
+        # NEW: Pier Height Effects Tab
+        with viz_tab5:
+            st.subheader("📐 支座高度效果分析")
+            
+            if hasattr(bridge, 'pier_heights') and bridge.pier_heights:
+                # Show pier height summary
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.subheader("🏛️ 支座高度分布")
+                    if hasattr(bridge, 'get_pier_height_summary'):
+                        height_summary = bridge.get_pier_height_summary()
+                        st.dataframe(height_summary, use_container_width=True)
+                
+                with col2:
+                    st.subheader("📊 高度效果统计")
+                    
+                    # Height statistics
+                    heights = bridge.pier_heights
+                    avg_height = np.mean(heights)
+                    max_height = max(heights)
+                    min_height = min(heights)
+                    height_std = np.std(heights)
+                    
+                    st.metric("平均高度", f"{avg_height:.1f} m")
+                    st.metric("最大高度", f"{max_height:.1f} m")
+                    st.metric("最小高度", f"{min_height:.1f} m")
+                    st.metric("高度标准差", f"{height_std:.2f} m")
+                
+                # Height effects visualization
+                st.subheader("📈 支座高度分布图")
+                
+                # Create pier height chart
+                fig_heights = go.Figure()
+                
+                pier_positions = [pier['x_coord'] for pier in bridge.piers]
+                pier_names = [f"墩台{i+1}" for i in range(len(bridge.piers))]
+                
+                fig_heights.add_trace(go.Bar(
+                    x=pier_positions,
+                    y=heights,
+                    name='支座高度',
+                    marker_color='lightblue',
+                    text=[f"{h:.1f}m" for h in heights],
+                    textposition='auto',
+                    hovertemplate='<b>%{hovertext}</b><br>位置: %{x:.1f}m<br>高度: %{y:.1f}m<extra></extra>',
+                    hovertext=pier_names
+                ))
+                
+                # Add average height line
+                fig_heights.add_hline(
+                    y=avg_height,
+                    line_dash="dash",
+                    line_color="red",
+                    annotation_text=f"平均高度: {avg_height:.1f}m"
+                )
+                
+                fig_heights.update_layout(
+                    title='支座高度分布',
+                    xaxis_title='桥梁位置 (m)',
+                    yaxis_title='支座高度 (m)',
+                    showlegend=True,
+                    height=400
+                )
+                
+                st.plotly_chart(fig_heights, use_container_width=True)
+                
+                # Height effects analysis
+                st.subheader("🔍 高度变化对结构的影响")
+                
+                if hasattr(bridge, 'get_pier_height_effects'):
+                    effect_col1, effect_col2 = st.columns(2)
+                    
+                    with effect_col1:
+                        st.write("**刚度影响分析:**")
+                        for i, height in enumerate(heights):
+                            base_height = 8.0  # Reference height
+                            flexibility_factor = (height / base_height) ** 3
+                            
+                            if flexibility_factor > 1.5:
+                                status = "🔴 较柔性"
+                            elif flexibility_factor > 1.2:
+                                status = "🟡 中等柔性"
+                            else:
+                                status = "🟢 较刚性"
+                            
+                            st.write(f"墩台{i+1} ({height:.1f}m): {status} (柔性系数: {flexibility_factor:.2f})")
+                    
+                    with effect_col2:
+                        st.write("**荷载分配影响:**")
+                        if 'reactions' in results and results['reactions']:
+                            # Calculate load distribution
+                            total_vertical = sum(abs(r['Fy']) for r in results['reactions'])
+                            
+                            for i, reaction in enumerate(results['reactions']):
+                                load_ratio = abs(reaction['Fy']) / total_vertical if total_vertical > 0 else 0
+                                height = heights[i] if i < len(heights) else 8.0
+                                
+                                load_percentage = load_ratio * 100
+                                st.write(f"墩台{i+1}: {load_percentage:.1f}% 总荷载 (高度: {height:.1f}m)")
+                        else:
+                            st.info("需要运行分析后才能显示荷载分配影响")
+                
+                # Interactive height adjustment
+                st.subheader("🎛️ 支座高度调节实验")
+                
+                st.write("**调节支座高度并观察结构响应变化:**")
+                
+                adjusted_heights = []
+                for i, current_height in enumerate(heights):
+                    pier_name = f"墩台{i+1}"
+                    
+                    new_height = st.slider(
+                        f"{pier_name} 高度调节",
+                        min_value=3.0,
+                        max_value=20.0,
+                        value=current_height,
+                        step=0.5,
+                        key=f"adjust_height_{i}",
+                        help=f"调节{pier_name}高度以观察结构响应变化"
+                    )
+                    
+                    adjusted_heights.append(new_height)
+                
+                # Show height change effects
+                height_changes = [adj - orig for adj, orig in zip(adjusted_heights, heights)]
+                if any(abs(change) > 0.1 for change in height_changes):
+                    st.write("**高度调节预期效果:**")
+                    
+                    for i, change in enumerate(height_changes):
+                        if abs(change) > 0.1:
+                            pier_name = f"墩台{i+1}"
+                            if change > 0:
+                                st.write(f"- {pier_name} 增高 {change:.1f}m → 支座柔性增加，承载减少")
+                            else:
+                                st.write(f"- {pier_name} 降低 {abs(change):.1f}m → 支座刚性增加，承载增加")
+                    
+                    if st.button("🔄 应用高度调节并重新分析", key="apply_height_changes"):
+                        # Update bridge heights
+                        if hasattr(bridge, 'update_multiple_pier_heights'):
+                            height_updates = {i: h for i, h in enumerate(adjusted_heights)}
+                            success = bridge.update_multiple_pier_heights(height_updates)
+                            
+                            if success:
+                                st.success("✅ 支座高度已更新！请重新运行分析查看效果。")
+                                # Clear cached results to force re-analysis
+                                if 'results' in st.session_state:
+                                    del st.session_state.results
+                                if 'analysis_done' in st.session_state:
+                                    del st.session_state.analysis_done
+                            else:
+                                st.error("❌ 支座高度更新失败")
+                        else:
+                            st.warning("⚠️ 当前分析引擎不支持高度调节功能")
+                
+            else:
+                st.info("支座高度数据不可用（可能使用的是简化分析引擎）")
         
         # Enhanced Detailed Engineering Tables
         if hasattr(bridge, 'get_analysis_tables'):

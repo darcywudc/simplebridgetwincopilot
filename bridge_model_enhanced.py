@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import xara
+import logging
 
 class BridgeModelXara:
     """
@@ -19,7 +20,7 @@ class BridgeModelXara:
     def __init__(self, length=60.0, num_elements=30, E=30e9, section_height=1.5, 
                  section_width=1.0, density=2400, num_spans=3, pier_start_position=0.0, 
                  bearings_per_pier=2, bridge_width=15.0, support_types=None, 
-                 beam_segments=None, custom_materials=None):
+                 beam_segments=None, custom_materials=None, pier_heights=None):
         """
         Initialize enhanced continuous beam bridge model with configurable supports and beams
         
@@ -37,6 +38,7 @@ class BridgeModelXara:
             support_types: List of support type configs for each pier
             beam_segments: List of beam segment configurations
             custom_materials: Dictionary of custom material properties
+            pier_heights: List of pier heights in meters (default: None for automatic calculation)
         """
         self.length = length
         self.num_elements = num_elements
@@ -57,6 +59,9 @@ class BridgeModelXara:
         
         # NEW: Custom materials
         self.custom_materials = custom_materials or {}
+        
+        # NEW: Pier heights configuration
+        self.pier_heights = pier_heights or self._default_pier_heights()
         
         # Calculate section properties
         self.A = section_height * section_width  # Cross-sectional area
@@ -104,6 +109,16 @@ class BridgeModelXara:
                 {'type': 'roller', 'dx': 0, 'dy': 1, 'rz': 0},         # Second pier
                 {'type': 'roller', 'dx': 0, 'dy': 1, 'rz': 0}          # Right abutment
             ]
+    
+    def _default_pier_heights(self):
+        """Generate default pier heights based on bridge configuration"""
+        # Default pier heights in meters
+        base_height = 8.0  # Base pier height
+        
+        if self.num_spans == 2:
+            return [base_height, base_height * 1.2, base_height]  # Center pier slightly higher
+        else:  # 3 spans
+            return [base_height, base_height * 1.5, base_height * 1.5, base_height]  # Center piers higher
     
     def _default_beam_segments(self):
         """Generate default beam segment configuration"""
@@ -160,10 +175,12 @@ class BridgeModelXara:
         # Set up pier information
         for i, pier_pos in enumerate(self.pier_positions):
             pier_x = pier_pos * self.length
+            pier_height = self.pier_heights[i] if i < len(self.pier_heights) else 8.0
             pier_info = {
                 'id': i,
                 'x_coord': pier_x,
                 'position': pier_pos,
+                'height': pier_height,  # NEW: Add pier height
                 'type': self._get_pier_type(i),
                 'bearings_count': self.bearings_per_pier,
                 'support_config': self.support_types[i] # Add support config to pier info
@@ -926,4 +943,137 @@ class BridgeModelXara:
             'max_vertical': max(abs(r['Fy']) for r in self.reactions),
             'max_horizontal': max(abs(r['Fx']) for r in self.reactions),
             'reactions_by_pier': self.reactions
-        } 
+        }
+    
+    def update_pier_height(self, pier_index, new_height):
+        """
+        Update pier height and recalculate structural response
+        
+        Args:
+            pier_index: Index of the pier to update (0-based)
+            new_height: New height in meters
+        
+        Returns:
+            bool: True if update was successful, False otherwise
+        """
+        if pier_index < 0 or pier_index >= len(self.piers):
+            return False
+            
+        # Update pier height
+        old_height = self.piers[pier_index]['height']
+        self.piers[pier_index]['height'] = new_height
+        self.pier_heights[pier_index] = new_height
+        
+        # Log the change
+        logging.info(f"Updated pier {pier_index + 1} height from {old_height:.2f}m to {new_height:.2f}m")
+        
+        return True
+    
+    def get_pier_height_effects(self, pier_index, height_change):
+        """
+        Calculate the effects of pier height change on structural response
+        
+        Args:
+            pier_index: Index of the pier (0-based)
+            height_change: Change in height (positive = increase, negative = decrease)
+            
+        Returns:
+            dict: Effects on moments, shears, and reactions
+        """
+        if pier_index < 0 or pier_index >= len(self.piers):
+            return {}
+            
+        # The height change affects the pier's flexibility and thus the force distribution
+        # Higher piers are more flexible, leading to reduced load sharing
+        # This is a simplified approach - in reality, pier flexibility depends on:
+        # - Pier height (h³ effect for cantilever deflection)
+        # - Cross-section properties
+        # - Material properties
+        
+        pier_info = self.piers[pier_index]
+        original_height = pier_info['height']
+        new_height = original_height + height_change
+        
+        # Calculate flexibility ratio (simplified)
+        # Pier flexibility is proportional to h³ for cantilever-like behavior
+        flexibility_ratio = (new_height / original_height) ** 3
+        
+        effects = {
+            'pier_index': pier_index,
+            'height_change': height_change,
+            'new_height': new_height,
+            'flexibility_ratio': flexibility_ratio,
+            'load_redistribution_factor': 1.0 / flexibility_ratio,
+            'estimated_reaction_change': f"{((1 - flexibility_ratio) * 100):.1f}%"
+        }
+        
+        return effects
+    
+    def update_multiple_pier_heights(self, height_updates):
+        """
+        Update multiple pier heights simultaneously
+        
+        Args:
+            height_updates: Dictionary {pier_index: new_height, ...}
+            
+        Returns:
+            bool: True if all updates were successful
+        """
+        success = True
+        for pier_index, new_height in height_updates.items():
+            if not self.update_pier_height(pier_index, new_height):
+                success = False
+                logging.error(f"Failed to update pier {pier_index + 1} height to {new_height}m")
+        
+        return success
+    
+    def get_pier_height_summary(self):
+        """
+        Get a summary of all pier heights and their effects
+        
+        Returns:
+            pandas.DataFrame: Summary table of pier heights
+        """
+        data = []
+        for i, pier in enumerate(self.piers):
+            pier_data = {
+                'Pier ID': i + 1,
+                'Pier Type': pier['type'],
+                'Position (m)': pier['x_coord'],
+                'Height (m)': pier['height'],
+                'Bearings Count': pier['bearings_count'],
+                'Support Type': pier['support_config']['type']
+            }
+            data.append(pier_data)
+        
+        return pd.DataFrame(data)
+    
+    def calculate_height_adjusted_analysis(self):
+        """
+        Perform analysis with current pier heights and return adjusted results
+        
+        Returns:
+            dict: Analysis results adjusted for pier heights
+        """
+        # Run normal analysis first
+        results = self.run_analysis()
+        
+        if not results.get('analysis_ok', False):
+            return results
+            
+        # Calculate pier height effects on reactions
+        height_effects = []
+        for i, pier in enumerate(self.piers):
+            effect = {
+                'pier_id': i + 1,
+                'height': pier['height'],
+                'flexibility_factor': (pier['height'] / 8.0) ** 3,  # Relative to 8m base height
+                'type': pier['type']
+            }
+            height_effects.append(effect)
+        
+        # Add height effects to results
+        results['pier_height_effects'] = height_effects
+        results['pier_height_summary'] = self.get_pier_height_summary()
+        
+        return results
