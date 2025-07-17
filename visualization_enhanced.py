@@ -276,7 +276,7 @@ class BridgeVisualizer:
             
             # Enhanced pier labeling
             pier_type = pier['type']
-            pier_id = pier['id']
+            pier_id = pier.get('id', pier.get('pier_id', 0))  # 使用id或pier_id，默认为0
             bearings_count = pier.get('bearings_count', 2)
             
             if pier_type == 'abutment_left':

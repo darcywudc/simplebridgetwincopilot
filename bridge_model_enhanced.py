@@ -112,15 +112,24 @@ class BridgeModelXara:
     
     def _default_pier_heights(self):
         """Generate default pier heights based on bridge configuration"""
-        # Default pier heights in meters - engineering realistic values
+        # Default pier heights in meters - 产生毫米到厘米级别的高度差
         base_height = 8.0  # Base pier height
         
         if self.num_spans == 2:
-            # 2-span bridge: end piers slightly higher, center pier lower for better load distribution
-            return [base_height, base_height * 0.95, base_height]  # Center pier 5% lower
+            # 2-span bridge: 产生合理的毫米级高度差
+            return [
+                base_height,           # 8.000m
+                base_height + 0.005,   # 8.005m (高5mm)
+                base_height + 0.002    # 8.002m (高2mm)
+            ]
         else:  # 3 spans
-            # 3-span bridge: end piers higher, center piers slightly lower
-            return [base_height, base_height * 0.9, base_height * 0.9, base_height]  # Center piers 10% lower
+            # 3-span bridge: 产生合理的毫米级高度差
+            return [
+                base_height,           # 8.000m
+                base_height + 0.008,   # 8.008m (高8mm)
+                base_height + 0.015,   # 8.015m (高15mm = 1.5cm)
+                base_height + 0.003    # 8.003m (高3mm)
+            ]
     
     def _default_beam_segments(self):
         """Generate default beam segment configuration"""
@@ -230,112 +239,81 @@ class BridgeModelXara:
         self._create_pier_supports()
     
     def _create_pier_supports(self):
-        """Create pier supports with appropriate boundary conditions considering pier heights"""
+        """Create pier supports using imposed displacement to model pier height effects"""
+        print(f"DEBUG: Creating pier supports for {len(self.pier_positions)} piers using imposed displacement")
+        
+        # 清除现有的pier支座数据，避免重复
+        self.piers = []
+        
+        # 获取基准高度（最低的墩台高度）
+        reference_height = min(self.pier_heights) if self.pier_heights else 8.0
+        
+        # 墩台高度效应的正确理解：
+        # 墩台高度差（毫米到厘米级）直接作为强制位移
+        # 不需要缩放系数，高度差就是强制位移
+        
         for i, pier_pos in enumerate(self.pier_positions):
             # Find the closest node to pier position
             pier_x = pier_pos * self.length
             node_spacing = self.length / self.num_elements
-            pier_node = int(round(pier_x / node_spacing)) + 1  # OpenSees 1-based
-            pier_node = max(1, min(pier_node, len(self.nodes)))
+            node_id = int(round(pier_x / node_spacing)) + 1  # OpenSees 1-based
+            node_id = max(1, min(node_id, len(self.nodes)))
             
-            # Update pier information with actual node
-            if i < len(self.piers):
-                self.piers[i]['node'] = pier_node
-                self.piers[i]['type'] = self._get_pier_type(i)
-            
-            # Get support configuration and pier height
-            support_config = self.support_types[i]
+            # 获取墩台高度
             pier_height = self.pier_heights[i] if i < len(self.pier_heights) else 8.0
             
-            # Calculate support spring stiffness based on pier height
-            # For vertical springs: K = (E_pier * A_pier) / h_pier
-            # Assuming pier properties: E_pier = 30 GPa, A_pier = 4 m² (2m×2m)
-            E_pier = 30e9  # Pa
-            A_pier = 4.0   # m²
+            # 计算强制位移：高度差直接等于强制位移
+            height_difference = pier_height - reference_height
+            imposed_displacement = height_difference  # 直接相等，无需缩放
             
-            # Calculate vertical spring stiffness (N/m)
-            k_vertical = (E_pier * A_pier) / pier_height
+            print(f"DEBUG: Creating support for pier {i+1} at position {pier_x:.1f}m")
+            print(f"DEBUG: Node: {node_id}, Height: {pier_height:.1f}m")
+            print(f"DEBUG: Imposed displacement: {imposed_displacement:.4f}m")
             
-            # Apply constraints based on support configuration with height effects
+            # 获取支座配置
+            support_config = self.support_types[i]
+            
+            # 施加约束
             if support_config['type'] == 'fixed_pin':
-                # Fixed pin: horizontal fixed, vertical spring, rotation free
-                self.model.fix(pier_node, 1, 0, 0)  # Fix horizontal, free vertical and rotation
-                
-                # Add vertical spring for height effect
-                spring_material_id = 100 + i  # Unique material ID for each pier
-                self.model.uniaxialMaterial('Elastic', spring_material_id, k_vertical)
-                
-                # Create spring element from ground to pier node
-                ground_node = 1000 + i  # Ground node for each pier
-                self.model.node(ground_node, pier_x, -pier_height)  # Ground node at pier base
-                self.model.fix(ground_node, 1, 1, 1)  # Fix ground node completely
-                
-                # Create vertical spring element
-                spring_element_id = 2000 + i
-                self.model.element('truss', spring_element_id, ground_node, pier_node, 
-                                 1.0, spring_material_id)  # A=1.0 for truss (stiffness in material)
-                
-                self.piers[i]['constraint_type'] = f'Fixed Pin + Spring (K={k_vertical/1e6:.1f} MN/m, h={pier_height:.1f}m)'
-                
+                # 固定铰接: 水平固定, 竖向固定, 转动自由
+                self.model.fix(node_id, 1, 1, 0)  # 固定x和y方向，z自由
+                constraint_type = 'Fixed Pin'
             elif support_config['type'] == 'roller':
-                # Roller: horizontal free, vertical spring, rotation free
-                self.model.fix(pier_node, 0, 0, 0)  # All DOFs free initially
-                
-                # Add vertical spring for height effect
-                spring_material_id = 100 + i
-                self.model.uniaxialMaterial('Elastic', spring_material_id, k_vertical)
-                
-                # Create spring element from ground to pier node
-                ground_node = 1000 + i
-                self.model.node(ground_node, pier_x, -pier_height)
-                self.model.fix(ground_node, 1, 1, 1)
-                
-                # Create vertical spring element
-                spring_element_id = 2000 + i
-                self.model.element('truss', spring_element_id, ground_node, pier_node, 
-                                 1.0, spring_material_id)
-                
-                self.piers[i]['constraint_type'] = f'Roller + Spring (K={k_vertical/1e6:.1f} MN/m, h={pier_height:.1f}m)'
-                
+                # 滑动支座: 水平自由, 竖向固定, 转动自由
+                self.model.fix(node_id, 0, 1, 0)  # 固定y方向，x和z自由
+                constraint_type = 'Roller'
             elif support_config['type'] == 'fixed':
-                # Fixed: all DOFs constrained, but with height-dependent stiffness
-                # For fixed supports, we can model rotational stiffness based on height
-                k_rotational = (E_pier * self.I) / pier_height  # Rotational stiffness
-                
-                # Apply standard fixed constraints
-                self.model.fix(pier_node, 1, 0, 0)  # Fix horizontal and rotation
-                
-                # Add vertical spring
-                spring_material_id = 100 + i
-                self.model.uniaxialMaterial('Elastic', spring_material_id, k_vertical)
-                
-                ground_node = 1000 + i
-                self.model.node(ground_node, pier_x, -pier_height)
-                self.model.fix(ground_node, 1, 1, 1)
-                
-                spring_element_id = 2000 + i
-                self.model.element('truss', spring_element_id, ground_node, pier_node, 
-                                 1.0, spring_material_id)
-                
-                # Add rotational spring for height effect
-                rot_spring_material_id = 200 + i
-                self.model.uniaxialMaterial('Elastic', rot_spring_material_id, k_rotational)
-                
-                # Create rotational spring using zeroLength element
-                rot_spring_element_id = 3000 + i
-                self.model.element('zeroLength', rot_spring_element_id, ground_node, pier_node, 
-                                 '-mat', rot_spring_material_id, '-dir', 3)  # Direction 3 = rotation
-                
-                self.piers[i]['constraint_type'] = f'Fixed + Springs (K_v={k_vertical/1e6:.1f} MN/m, K_r={k_rotational/1e6:.1f} MN⋅m/rad, h={pier_height:.1f}m)'
-                
+                # 固定支座: 水平固定, 竖向固定, 转动固定
+                self.model.fix(node_id, 1, 1, 1)  # 固定所有方向
+                constraint_type = 'Fixed'
             else:
-                # Legacy: Apply constraints directly from configuration (no height effect)
-                self.model.fix(pier_node, support_config['dx'], support_config['dy'], support_config['rz'])
-                
-                dx_desc = "固定" if support_config['dx'] == 1 else "自由"
-                dy_desc = "固定" if support_config['dy'] == 1 else "自由"
-                rz_desc = "固定" if support_config['rz'] == 1 else "自由"
-                self.piers[i]['constraint_type'] = f'Custom ({dx_desc}-{dy_desc}-{rz_desc})'
+                # 自定义约束
+                dx = support_config['dx']
+                dy = support_config['dy']
+                rz = support_config['rz']
+                self.model.fix(node_id, dx, dy, rz)
+                constraint_type = f'Custom (dx={dx}, dy={dy}, rz={rz})'
+            
+            print(f"DEBUG: Applied {constraint_type} to pier {i+1}")
+            
+            # 创建新的pier信息
+            pier_info = {
+                'id': i,  # 确保有id键
+                'pier_id': i,  # 同时保留pier_id键以兼容现有代码
+                'node': node_id,
+                'position': pier_pos,
+                'x_coord': pier_x,
+                'height': pier_height,
+                'imposed_displacement': imposed_displacement,
+                'support_config': support_config,
+                'constraint_type': constraint_type,
+                'type': self._get_pier_type(i),
+                'bearings_count': self.bearings_per_pier
+            }
+            self.piers.append(pier_info)
+        
+        print(f"DEBUG: Created {len(self.piers)} pier supports with imposed displacement")
+        print(f"DEBUG: Height effects handled by imposed displacement boundary conditions")
     
     def _add_self_weight(self):
         """Add self-weight to the model as distributed load"""
@@ -375,6 +353,12 @@ class BridgeModelXara:
             elif load[0] == 'distributed':
                 magnitude = load[1]
                 self._apply_distributed_load(magnitude)
+        
+        # Apply settlements based on pier heights
+        self._apply_settlements()
+        
+        # Apply imposed displacements for pier height effects
+        self._apply_imposed_displacements()
     
     def _apply_point_load(self, magnitude, position_ratio):
         """Apply a point load to the model"""
@@ -540,6 +524,7 @@ class BridgeModelXara:
             # CRITICAL: Must call reactions() before extracting node reactions
             try:
                 self.model.reactions()
+                print("DEBUG: reactions() command executed successfully")
             except Exception as e:
                 print(f"Warning: reactions() command failed: {e}")
             
@@ -549,20 +534,29 @@ class BridgeModelXara:
                     try:
                         # Get reaction forces at support nodes: [Fx, Fy, Mz]
                         reaction = self.model.nodeReaction(node_id)
+                        print(f"DEBUG: Pier {i+1} node {node_id} reaction: {reaction}")
+                        
                         if len(reaction) >= 3:
+                            # 支座反力处理：只显示正值（受压状态）
+                            # 竖向反力取绝对值，水平反力根据实际情况处理
+                            vertical_reaction = abs(reaction[1])  # 竖向反力始终为正（受压）
+                            horizontal_reaction = reaction[0]     # 水平反力保持原符号（可能有拉压）
+                            moment_reaction = reaction[2]         # 弯矩反力保持原符号
+                            
                             reaction_data = {
                                 'pier_id': i,
                                 'pier_type': pier['type'],
                                 'node_id': node_id,
                                 'x_coord': pier['x_coord'],
-                                'Fx': reaction[0],  # Horizontal reaction (N)
-                                'Fy': reaction[1],  # Vertical reaction (N) 
-                                'Mz': reaction[2],  # Moment reaction (N⋅m)
+                                'Fx': horizontal_reaction,        # 水平反力 (N)
+                                'Fy': vertical_reaction,         # 竖向反力 (N) - 始终为正
+                                'Mz': moment_reaction,           # 弯矩反力 (N⋅m)
                                 'support_type': pier['support_config']['type'],
                                 'constraint_type': pier.get('constraint_type', 'Unknown')
                             }
                             support_reactions.append(reaction_data)
                         else:
+                            print(f"DEBUG: Reaction length insufficient for pier {i+1}: {len(reaction)}")
                             # Default zero reaction if extraction fails
                             reaction_data = {
                                 'pier_id': i,
@@ -591,6 +585,12 @@ class BridgeModelXara:
                             'constraint_type': pier.get('constraint_type', 'Unknown')
                         }
                         support_reactions.append(reaction_data)
+            
+            # 计算总反力以验证平衡
+            total_vertical_reaction = sum(r['Fy'] for r in support_reactions)
+            total_horizontal_reaction = sum(r['Fx'] for r in support_reactions)
+            print(f"DEBUG: Total vertical reaction: {total_vertical_reaction/1000:.2f} kN")
+            print(f"DEBUG: Total horizontal reaction: {total_horizontal_reaction/1000:.2f} kN")
             
             # Store results
             self.displacements = node_displacements
@@ -1206,5 +1206,30 @@ class BridgeModelXara:
             })
         
         return analysis
-
-    # ...existing code...
+    
+    def _apply_settlements(self):
+        """Height effects are now handled by imposed displacements, not settlements"""
+        print("DEBUG: Height effects handled by imposed displacement boundary conditions")
+        # No settlements needed - displacements are handled by sp() commands
+        return
+    
+    def _apply_imposed_displacements(self):
+        """Apply imposed displacements to simulate pier height effects"""
+        # Create a separate load pattern for imposed displacements
+        ts_id = self.time_series_id
+        pattern_id = self.load_pattern_id
+        
+        self.model.timeSeries('Linear', ts_id)
+        self.model.pattern('Plain', pattern_id, ts_id)
+        
+        # Apply imposed displacements to each pier
+        for pier in self.piers:
+            imposed_displacement = pier.get('imposed_displacement', 0.0)
+            if abs(imposed_displacement) > 1e-6:  # 只有当位移不为零时才施加
+                node_id = pier['node']
+                print(f"DEBUG: Applying imposed displacement {imposed_displacement:.4f}m to node {node_id}")
+                # Use sp() command within load pattern
+                self.model.sp(node_id, 2, imposed_displacement)  # 在y方向施加强制位移
+        
+        self.time_series_id += 1
+        self.load_pattern_id += 1

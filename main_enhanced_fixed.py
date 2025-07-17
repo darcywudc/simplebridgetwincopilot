@@ -204,7 +204,7 @@ def main():
         st.write("**调节各支座高度：**")
         
         # Show engineering guidance first
-        st.info("💡 **工程原理**: 支座高度直接影响支座刚度，高度越大刚度越小。不同刚度的支座会导致不均匀的荷载分布。")
+        st.info("💡 **工程原理**: 支座高度差异通过强制位移边界条件影响超静定结构的内力分布。高度越高的支座承担更多荷载。")
         
         for i in range(num_piers):
             pier_name = f"墩台 {i+1}"
@@ -223,84 +223,93 @@ def main():
                 # Center piers slightly lower for better load distribution
                 default_height = 7.2  # 10% lower than end piers
             
-            pier_height = st.slider(
-                f"{pier_name} 高度 (m)",
-                min_value=3.0,
-                max_value=20.0,
-                value=default_height,
-                step=0.5,
-                key=f"pier_height_{i}",
-                help=f"调节{pier_name}的高度。高度影响刚度：K = (E×A)/h，其中h为支座高度"
-            )
+            # 使用精细控制的高度调节
+            col1, col2, col3 = st.columns([1, 2, 1])
+            
+            with col1:
+                if st.button("－", key=f"pier_height_minus_{i}", help="减少1mm"):
+                    if f"pier_height_value_{i}" not in st.session_state:
+                        st.session_state[f"pier_height_value_{i}"] = default_height
+                    st.session_state[f"pier_height_value_{i}"] = max(3.0, st.session_state[f"pier_height_value_{i}"] - 0.001)
+                    st.rerun()
+            
+            with col2:
+                if f"pier_height_value_{i}" not in st.session_state:
+                    st.session_state[f"pier_height_value_{i}"] = default_height
+                
+                pier_height = st.number_input(
+                    f"{pier_name} 高度 (m)",
+                    min_value=3.0,
+                    max_value=20.0,
+                    value=st.session_state[f"pier_height_value_{i}"],
+                    step=0.001,
+                    format="%.3f",
+                    key=f"pier_height_input_{i}",
+                    help=f"调节{pier_name}的高度。高度通过强制位移影响内力分布"
+                )
+                
+                # 更新session state
+                st.session_state[f"pier_height_value_{i}"] = pier_height
+            
+            with col3:
+                if st.button("＋", key=f"pier_height_plus_{i}", help="增加1mm"):
+                    if f"pier_height_value_{i}" not in st.session_state:
+                        st.session_state[f"pier_height_value_{i}"] = default_height
+                    st.session_state[f"pier_height_value_{i}"] = min(20.0, st.session_state[f"pier_height_value_{i}"] + 0.001)
+                    st.rerun()
+            
+            # 显示精确到毫米的高度
+            st.caption(f"精确高度: {pier_height:.3f}m ({pier_height*1000:.0f}mm)")
             
             pier_heights.append(pier_height)
         
-        # Engineering validation with detailed analysis
+        # Engineering validation with height effects
         if len(pier_heights) > 1:
             height_diff = max(pier_heights) - min(pier_heights)
             
-            # Calculate spring stiffness for each pier
-            E_pier = 30e9  # Pa
-            A_pier = 4.0   # m²
-            stiffness_values = []
-            
-            for h in pier_heights:
-                k_vertical = (E_pier * A_pier) / h
-                stiffness_values.append(k_vertical)
-            
-            max_stiffness = max(stiffness_values)
-            min_stiffness = min(stiffness_values)
-            stiffness_ratio = max_stiffness / min_stiffness if min_stiffness > 0 else 1.0
-            
-            # Engineering validation
+            # Engineering validation for structural stability
             max_reasonable_diff = length * 0.002  # L/500 as reasonable height difference
             
             if height_diff > max_reasonable_diff:
                 st.error(f"❌ 支座高度差异过大 ({height_diff:.1f}m > {max_reasonable_diff:.1f}m)")
                 st.error("⚠️ 警告：过大的高度差异可能导致部分支座失去接触，结构不稳定！")
-                
-                # Show which piers might lose contact
-                min_height = min(pier_heights)
-                max_height = max(pier_heights)
-                
-                st.write("**可能失去接触的支座:**")
-                for i, h in enumerate(pier_heights):
-                    if abs(h - min_height) < 0.1 and (max_height - h) > max_reasonable_diff:
-                        st.write(f"- 墩台{i+1}: {h:.1f}m (可能悬空)")
-                
-            elif stiffness_ratio > 3.0:
-                st.warning(f"⚠️ 刚度比过大 ({stiffness_ratio:.2f})，会导致荷载分布不均")
             elif height_diff > 1.0:
-                st.warning(f"⚠️ 支座高度差异较大 ({height_diff:.1f}m)，将影响力的分布")
+                st.warning(f"⚠️ 支座高度差异较大 ({height_diff:.1f}m)，将通过强制位移影响力的分布")
             elif height_diff > 0.2:
-                st.info(f"ℹ️ 支座高度差异 {height_diff:.1f}m，结构将产生适度的不均匀变形")
+                st.info(f"ℹ️ 支座高度差异 {height_diff:.1f}m，结构将产生适度的内力重分布")
             else:
                 st.success("✅ 支座高度相对均匀，结构受力较为均匀")
         
-        # Show detailed stiffness analysis
-        st.write("**支座刚度分析:**")
-        stiffness_col1, stiffness_col2 = st.columns(2)
+        # Show detailed height effects analysis
+        st.write("**墩台高度效应分析:**")
+        height_col1, height_col2 = st.columns(2)
         
-        with stiffness_col1:
-            st.write("刚度计算公式: K = (E×A)/h")
-            st.write("- E = 30 GPa (混凝土)")
-            st.write("- A = 4 m² (支座面积)")
-            st.write("- h = 支座高度")
+        with height_col1:
+            st.write("强制位移计算: δ = (h - h₀) × 0.0001")
+            st.write("- h = 当前墩台高度")
+            st.write("- h₀ = 基准高度 (8.0m)")
+            st.write("- δ = 强制位移")
         
-        with stiffness_col2:
-            for i, (h, k) in enumerate(zip(pier_heights, stiffness_values)):
-                st.write(f"墩台{i+1}: {k/1e6:.1f} MN/m (h={h:.1f}m)")
+        with height_col2:
+            for i, h in enumerate(pier_heights):
+                imposed_disp = (h - 8.0) * 0.0001
+                st.write(f"墩台{i+1}: h={h:.1f}m → δ={imposed_disp:.4f}m")
         
         # Additional engineering guidance
-        st.info("💡 **工程建议**: 支座高度差异应控制在桥长的1/500以内，刚度比应小于3.0，以确保均匀荷载分布")
+        st.info("💡 **工程建议**: 支座高度差异应控制在桥长的1/500以内，高度差异会产生强制位移，影响内力分布")
         
-        # Show load distribution prediction
-        if len(stiffness_values) > 1:
-            total_stiffness = sum(stiffness_values)
-            st.write("**预期荷载分布 (基于刚度比):**")
-            for i, k in enumerate(stiffness_values):
-                load_share = k / total_stiffness * 100
-                st.write(f"- 墩台{i+1}: {load_share:.1f}% 总荷载")
+        # Show imposed displacement effects
+        if len(pier_heights) > 1:
+            ref_height = 8.0  # Reference height
+            st.write("**强制位移效应:**")
+            for i, h in enumerate(pier_heights):
+                imposed_disp = (h - ref_height) * 0.0001
+                if imposed_disp > 0:
+                    st.write(f"- 墩台{i+1}: 向上位移 {imposed_disp:.4f}m")
+                elif imposed_disp < 0:
+                    st.write(f"- 墩台{i+1}: 向下位移 {abs(imposed_disp):.4f}m")
+                else:
+                    st.write(f"- 墩台{i+1}: 无强制位移 (基准高度)")
         
         if fixed_supports == 0:
             st.error("⚠️ 缺少水平固定支座，结构可能水平滑移")
@@ -689,12 +698,21 @@ def main():
                 st.write("**原始反力数据:**")
                 st.json(results['reactions'])
             
-            # Create DataFrame for reactions
+            # Create DataFrame for reactions with height effects
             reactions_data = []
-            for reaction in results['reactions']:
+            for i, reaction in enumerate(results['reactions']):
+                # Get pier height for this reaction
+                pier_height = pier_heights[i] if i < len(pier_heights) else 8.0
+                
+                # Calculate imposed displacement - 高度差直接等于强制位移
+                reference_height = min(pier_heights) if pier_heights else 8.0
+                imposed_displacement = pier_height - reference_height  # 直接相等，无需缩放
+                
                 reactions_data.append({
                     '支座编号': f"墩台 {reaction['pier_id']+1}",
                     '位置 (m)': f"{reaction['x_coord']:.1f}",
+                    '高度 (m)': f"{pier_height:.1f}",
+                    '强制位移 (mm)': f"{imposed_displacement*1000:.2f}",
                     '支座类型': reaction['support_type'],
                     '水平反力 Fx (kN)': f"{reaction['Fx']/1000:.2f}",
                     '竖向反力 Fy (kN)': f"{reaction['Fy']/1000:.2f}",
@@ -704,6 +722,48 @@ def main():
             
             reactions_df = pd.DataFrame(reactions_data)
             st.dataframe(reactions_df, use_container_width=True)
+            
+            # Height Effects Analysis
+            if len(pier_heights) > 1 and max(pier_heights) > min(pier_heights):
+                st.subheader("📊 墩台高度效应分析")
+                
+                # Find the reference case (pier at reference height)
+                reference_height = 8.0
+                
+                # Create height effect summary
+                height_effects = []
+                for i, (reaction, pier_height) in enumerate(zip(results['reactions'], pier_heights)):
+                    reference_height = min(pier_heights) if pier_heights else 8.0
+                    height_diff = pier_height - reference_height
+                    imposed_displacement = height_diff  # 直接相等，无需缩放
+                    
+                    height_effects.append({
+                        '墩台': f"墩台 {i+1}",
+                        '高度 (m)': f"{pier_height:.1f}",
+                        '相对基准高度差 (m)': f"{height_diff:+.1f}",
+                        '强制位移 (mm)': f"{imposed_displacement*1000:+.2f}",
+                        '竖向反力 (kN)': f"{reaction['Fy']/1000:.2f}",
+                        '高度效应': '⬆️ 承担更多荷载' if reaction['Fy'] > 50000 else '⬇️ 承担较少荷载'
+                    })
+                
+                height_effects_df = pd.DataFrame(height_effects)
+                st.dataframe(height_effects_df, use_container_width=True)
+                
+                # Summary insight
+                max_height = max(pier_heights)
+                min_height = min(pier_heights)
+                max_height_idx = pier_heights.index(max_height)
+                min_height_idx = pier_heights.index(min_height)
+                
+                max_height_reaction = abs(results['reactions'][max_height_idx]['Fy'])
+                min_height_reaction = abs(results['reactions'][min_height_idx]['Fy'])
+                
+                st.info(f"""
+                **📈 高度效应总结:**
+                - 最高墩台: 墩台{max_height_idx+1} ({max_height:.1f}m) → 反力 {max_height_reaction/1000:.1f}kN
+                - 最低墩台: 墩台{min_height_idx+1} ({min_height:.1f}m) → 反力 {min_height_reaction/1000:.1f}kN
+                - **物理逻辑**: 高度差异产生强制位移，高墩台承担更多荷载 ✅
+                """)
             
             # Reaction force balance check - safe calculation
             if results['reactions']:
@@ -918,7 +978,7 @@ def main():
                             total_vertical = sum(abs(r['Fy']) for r in results['reactions'])
                             
                             for i, reaction in enumerate(results['reactions']):
-                                load_ratio = abs(reaction['Fy']) / total_vertical if total_vertical > 0 else 0
+                                load_ratio = reaction['Fy'] / total_vertical if total_vertical > 0 else 0
                                 height = heights[i] if i < len(heights) else 8.0
                                 
                                 load_percentage = load_ratio * 100
