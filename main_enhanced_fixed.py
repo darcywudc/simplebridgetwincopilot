@@ -212,8 +212,13 @@ def main():
             else:
                 pier_name += " (中间墩)"
             
-            # Default height based on pier type
-            default_height = 8.0 if i == 0 or i == num_piers - 1 else 12.0
+            # Default height based on pier type - engineering realistic values
+            if i == 0 or i == num_piers - 1:
+                # End piers (abutments) at base height
+                default_height = 8.0
+            else:
+                # Center piers slightly lower for better load distribution
+                default_height = 7.2  # 10% lower than end piers
             
             pier_height = st.slider(
                 f"{pier_name} 高度 (m)",
@@ -227,15 +232,35 @@ def main():
             
             pier_heights.append(pier_height)
         
-        # Show height effects preview
+        # Show height effects preview with engineering validation
         if len(pier_heights) > 1:
             height_diff = max(pier_heights) - min(pier_heights)
-            if height_diff > 2.0:
+            
+            # Engineering validation
+            max_reasonable_diff = length * 0.002  # L/500 as reasonable height difference
+            
+            if height_diff > max_reasonable_diff:
+                st.error(f"❌ 支座高度差异过大 ({height_diff:.1f}m > {max_reasonable_diff:.1f}m)")
+                st.error("⚠️ 警告：过大的高度差异可能导致部分支座失去接触，结构不稳定！")
+                
+                # Show which piers might lose contact
+                min_height = min(pier_heights)
+                max_height = max(pier_heights)
+                
+                st.write("**可能失去接触的支座:**")
+                for i, h in enumerate(pier_heights):
+                    if abs(h - min_height) < 0.1 and (max_height - h) > max_reasonable_diff:
+                        st.write(f"- 墩台{i+1}: {h:.1f}m (可能悬空)")
+                
+            elif height_diff > 1.0:
                 st.warning(f"⚠️ 支座高度差异较大 ({height_diff:.1f}m)，将影响力的分布")
-            elif height_diff > 0.5:
-                st.info(f"ℹ️ 支座高度差异 {height_diff:.1f}m，结构将产生不均匀变形")
+            elif height_diff > 0.2:
+                st.info(f"ℹ️ 支座高度差异 {height_diff:.1f}m，结构将产生适度的不均匀变形")
             else:
                 st.success("✅ 支座高度相对均匀，结构受力较为均匀")
+        
+        # Additional engineering guidance
+        st.info("💡 **工程建议**: 支座高度差异应控制在桥长的1/500以内，以确保所有支座都能有效承载")
         
         if fixed_supports == 0:
             st.error("⚠️ 缺少水平固定支座，结构可能水平滑移")

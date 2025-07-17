@@ -112,13 +112,15 @@ class BridgeModelXara:
     
     def _default_pier_heights(self):
         """Generate default pier heights based on bridge configuration"""
-        # Default pier heights in meters
+        # Default pier heights in meters - engineering realistic values
         base_height = 8.0  # Base pier height
         
         if self.num_spans == 2:
-            return [base_height, base_height * 1.2, base_height]  # Center pier slightly higher
+            # 2-span bridge: end piers slightly higher, center pier lower for better load distribution
+            return [base_height, base_height * 0.95, base_height]  # Center pier 5% lower
         else:  # 3 spans
-            return [base_height, base_height * 1.5, base_height * 1.5, base_height]  # Center piers higher
+            # 3-span bridge: end piers higher, center piers slightly lower
+            return [base_height, base_height * 0.9, base_height * 0.9, base_height]  # Center piers 10% lower
     
     def _default_beam_segments(self):
         """Generate default beam segment configuration"""
@@ -1077,3 +1079,61 @@ class BridgeModelXara:
         results['pier_height_summary'] = self.get_pier_height_summary()
         
         return results
+    
+    def validate_pier_heights(self):
+        """
+        Validate pier heights for engineering reasonableness
+        
+        Returns:
+            dict: Validation results with warnings and recommendations
+        """
+        if not self.pier_heights:
+            return {'valid': True, 'warnings': [], 'recommendations': []}
+        
+        validation = {
+            'valid': True,
+            'warnings': [],
+            'recommendations': [],
+            'height_stats': {
+                'min': min(self.pier_heights),
+                'max': max(self.pier_heights),
+                'diff': max(self.pier_heights) - min(self.pier_heights),
+                'avg': sum(self.pier_heights) / len(self.pier_heights)
+            }
+        }
+        
+        max_height = max(self.pier_heights)
+        min_height = min(self.pier_heights)
+        height_diff = max_height - min_height
+        
+        # Engineering limits based on bridge length
+        max_reasonable_diff = self.length * 0.002  # L/500
+        critical_diff = self.length * 0.005  # L/200
+        
+        if height_diff > critical_diff:
+            validation['valid'] = False
+            validation['warnings'].append(f"Critical: Height difference {height_diff:.2f}m exceeds {critical_diff:.2f}m (L/200)")
+            validation['warnings'].append("Risk: Some piers may lose contact, causing structural instability")
+        elif height_diff > max_reasonable_diff:
+            validation['warnings'].append(f"Warning: Height difference {height_diff:.2f}m exceeds recommended {max_reasonable_diff:.2f}m (L/500)")
+        
+        # Check for individual pier issues
+        for i, height in enumerate(self.pier_heights):
+            if abs(height - min_height) < 0.1 and (max_height - height) > max_reasonable_diff:
+                validation['warnings'].append(f"Pier {i+1} at {height:.1f}m may lose contact (too low)")
+            elif abs(height - max_height) < 0.1 and (height - min_height) > max_reasonable_diff:
+                validation['warnings'].append(f"Pier {i+1} at {height:.1f}m may carry excessive load (too high)")
+        
+        # Recommendations
+        if height_diff > max_reasonable_diff:
+            validation['recommendations'].append("Consider reducing height differences to < L/500")
+            validation['recommendations'].append("Ensure gradual height transitions between adjacent piers")
+        
+        if len(self.pier_heights) > 2:
+            # Check for sudden height changes
+            for i in range(1, len(self.pier_heights)):
+                height_change = abs(self.pier_heights[i] - self.pier_heights[i-1])
+                if height_change > 1.0:
+                    validation['warnings'].append(f"Sudden height change between piers {i} and {i+1}: {height_change:.1f}m")
+        
+        return validation
