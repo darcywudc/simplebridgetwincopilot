@@ -230,7 +230,7 @@ class BridgeModelXara:
         self._create_pier_supports()
     
     def _create_pier_supports(self):
-        """Create pier supports with appropriate boundary conditions for continuous beam bridge"""
+        """Create pier supports with appropriate boundary conditions considering pier heights"""
         for i, pier_pos in enumerate(self.pier_positions):
             # Find the closest node to pier position
             pier_x = pier_pos * self.length
@@ -243,23 +243,95 @@ class BridgeModelXara:
                 self.piers[i]['node'] = pier_node
                 self.piers[i]['type'] = self._get_pier_type(i)
             
-            # Add support constraints based on support configuration
+            # Get support configuration and pier height
             support_config = self.support_types[i]
+            pier_height = self.pier_heights[i] if i < len(self.pier_heights) else 8.0
             
-            # Apply constraints directly from configuration
-            self.model.fix(pier_node, support_config['dx'], support_config['dy'], support_config['rz'])
+            # Calculate support spring stiffness based on pier height
+            # For vertical springs: K = (E_pier * A_pier) / h_pier
+            # Assuming pier properties: E_pier = 30 GPa, A_pier = 4 m² (2m×2m)
+            E_pier = 30e9  # Pa
+            A_pier = 4.0   # m²
             
-            # Set descriptive constraint type based on support configuration
+            # Calculate vertical spring stiffness (N/m)
+            k_vertical = (E_pier * A_pier) / pier_height
+            
+            # Apply constraints based on support configuration with height effects
             if support_config['type'] == 'fixed_pin':
-                self.piers[i]['constraint_type'] = 'Fixed Pin (dx=0, dy=0, rz=free)'
+                # Fixed pin: horizontal fixed, vertical spring, rotation free
+                self.model.fix(pier_node, 1, 0, 0)  # Fix horizontal, free vertical and rotation
+                
+                # Add vertical spring for height effect
+                spring_material_id = 100 + i  # Unique material ID for each pier
+                self.model.uniaxialMaterial('Elastic', spring_material_id, k_vertical)
+                
+                # Create spring element from ground to pier node
+                ground_node = 1000 + i  # Ground node for each pier
+                self.model.node(ground_node, pier_x, -pier_height)  # Ground node at pier base
+                self.model.fix(ground_node, 1, 1, 1)  # Fix ground node completely
+                
+                # Create vertical spring element
+                spring_element_id = 2000 + i
+                self.model.element('truss', spring_element_id, ground_node, pier_node, 
+                                 1.0, spring_material_id)  # A=1.0 for truss (stiffness in material)
+                
+                self.piers[i]['constraint_type'] = f'Fixed Pin + Spring (K={k_vertical/1e6:.1f} MN/m, h={pier_height:.1f}m)'
+                
             elif support_config['type'] == 'roller':
-                self.piers[i]['constraint_type'] = 'Roller (dx=free, dy=0, rz=free)'
+                # Roller: horizontal free, vertical spring, rotation free
+                self.model.fix(pier_node, 0, 0, 0)  # All DOFs free initially
+                
+                # Add vertical spring for height effect
+                spring_material_id = 100 + i
+                self.model.uniaxialMaterial('Elastic', spring_material_id, k_vertical)
+                
+                # Create spring element from ground to pier node
+                ground_node = 1000 + i
+                self.model.node(ground_node, pier_x, -pier_height)
+                self.model.fix(ground_node, 1, 1, 1)
+                
+                # Create vertical spring element
+                spring_element_id = 2000 + i
+                self.model.element('truss', spring_element_id, ground_node, pier_node, 
+                                 1.0, spring_material_id)
+                
+                self.piers[i]['constraint_type'] = f'Roller + Spring (K={k_vertical/1e6:.1f} MN/m, h={pier_height:.1f}m)'
+                
             elif support_config['type'] == 'fixed':
-                self.piers[i]['constraint_type'] = 'Fixed Support (dx=0, dy=0, rz=0)'
-            elif support_config['type'] == 'spring_vertical':
-                self.piers[i]['constraint_type'] = 'Vertical Spring (dx=free, dy=elastic, rz=free)'
+                # Fixed: all DOFs constrained, but with height-dependent stiffness
+                # For fixed supports, we can model rotational stiffness based on height
+                k_rotational = (E_pier * self.I) / pier_height  # Rotational stiffness
+                
+                # Apply standard fixed constraints
+                self.model.fix(pier_node, 1, 0, 0)  # Fix horizontal and rotation
+                
+                # Add vertical spring
+                spring_material_id = 100 + i
+                self.model.uniaxialMaterial('Elastic', spring_material_id, k_vertical)
+                
+                ground_node = 1000 + i
+                self.model.node(ground_node, pier_x, -pier_height)
+                self.model.fix(ground_node, 1, 1, 1)
+                
+                spring_element_id = 2000 + i
+                self.model.element('truss', spring_element_id, ground_node, pier_node, 
+                                 1.0, spring_material_id)
+                
+                # Add rotational spring for height effect
+                rot_spring_material_id = 200 + i
+                self.model.uniaxialMaterial('Elastic', rot_spring_material_id, k_rotational)
+                
+                # Create rotational spring using zeroLength element
+                rot_spring_element_id = 3000 + i
+                self.model.element('zeroLength', rot_spring_element_id, ground_node, pier_node, 
+                                 '-mat', rot_spring_material_id, '-dir', 3)  # Direction 3 = rotation
+                
+                self.piers[i]['constraint_type'] = f'Fixed + Springs (K_v={k_vertical/1e6:.1f} MN/m, K_r={k_rotational/1e6:.1f} MN⋅m/rad, h={pier_height:.1f}m)'
+                
             else:
-                # Generic description based on constraints
+                # Legacy: Apply constraints directly from configuration (no height effect)
+                self.model.fix(pier_node, support_config['dx'], support_config['dy'], support_config['rz'])
+                
                 dx_desc = "固定" if support_config['dx'] == 1 else "自由"
                 dy_desc = "固定" if support_config['dy'] == 1 else "自由"
                 rz_desc = "固定" if support_config['rz'] == 1 else "自由"
@@ -1031,109 +1103,108 @@ class BridgeModelXara:
     
     def get_pier_height_summary(self):
         """
-        Get a summary of all pier heights and their effects
+        Generate a summary table of pier heights and their effects
         
         Returns:
-            pandas.DataFrame: Summary table of pier heights
+            pandas.DataFrame: Summary of pier heights and calculated effects
         """
-        data = []
-        for i, pier in enumerate(self.piers):
-            pier_data = {
-                'Pier ID': i + 1,
-                'Pier Type': pier['type'],
-                'Position (m)': pier['x_coord'],
-                'Height (m)': pier['height'],
-                'Bearings Count': pier['bearings_count'],
-                'Support Type': pier['support_config']['type']
-            }
-            data.append(pier_data)
+        summary_data = []
         
-        return pd.DataFrame(data)
-    
-    def calculate_height_adjusted_analysis(self):
-        """
-        Perform analysis with current pier heights and return adjusted results
+        E_pier = 30e9  # Pa
+        A_pier = 4.0   # m²
         
-        Returns:
-            dict: Analysis results adjusted for pier heights
-        """
-        # Run normal analysis first
-        results = self.run_analysis()
-        
-        if not results.get('analysis_ok', False):
-            return results
+        for i, (pier, height) in enumerate(zip(self.piers, self.pier_heights)):
+            # Calculate spring stiffness
+            k_vertical = (E_pier * A_pier) / height
             
-        # Calculate pier height effects on reactions
-        height_effects = []
-        for i, pier in enumerate(self.piers):
-            effect = {
-                'pier_id': i + 1,
-                'height': pier['height'],
-                'flexibility_factor': (pier['height'] / 8.0) ** 3,  # Relative to 8m base height
-                'type': pier['type']
-            }
-            height_effects.append(effect)
+            # Calculate relative flexibility (higher = more flexible)
+            base_height = 8.0
+            flexibility_ratio = (height / base_height) ** 3
+            
+            # Determine pier type
+            pier_type = pier.get('type', 'unknown')
+            pier_name = {
+                'abutment_left': '左桥台',
+                'abutment_right': '右桥台', 
+                'pier_intermediate': '中间墩'
+            }.get(pier_type, pier_type)
+            
+            summary_data.append({
+                '支座编号': f'墩台 {i+1}',
+                '支座类型': pier_name,
+                '位置 (m)': f"{pier.get('x_coord', 0):.1f}",
+                '高度 (m)': f"{height:.1f}",
+                '竖向刚度 (MN/m)': f"{k_vertical/1e6:.1f}",
+                '柔性比': f"{flexibility_ratio:.2f}",
+                '相对刚度': f"{1/flexibility_ratio:.2f}"
+            })
         
-        # Add height effects to results
-        results['pier_height_effects'] = height_effects
-        results['pier_height_summary'] = self.get_pier_height_summary()
-        
-        return results
+        return pd.DataFrame(summary_data)
     
-    def validate_pier_heights(self):
+    def get_height_effect_analysis(self):
         """
-        Validate pier heights for engineering reasonableness
+        Analyze the structural effects of current pier height configuration
         
         Returns:
-            dict: Validation results with warnings and recommendations
+            dict: Analysis of height effects on structural behavior
         """
         if not self.pier_heights:
-            return {'valid': True, 'warnings': [], 'recommendations': []}
+            return {'error': 'No pier heights defined'}
         
-        validation = {
-            'valid': True,
-            'warnings': [],
-            'recommendations': [],
-            'height_stats': {
-                'min': min(self.pier_heights),
-                'max': max(self.pier_heights),
-                'diff': max(self.pier_heights) - min(self.pier_heights),
-                'avg': sum(self.pier_heights) / len(self.pier_heights)
-            }
+        analysis = {
+            'height_statistics': {
+                'max_height': max(self.pier_heights),
+                'min_height': min(self.pier_heights),
+                'avg_height': np.mean(self.pier_heights),
+                'std_height': np.std(self.pier_heights),
+                'height_range': max(self.pier_heights) - min(self.pier_heights)
+            },
+            'stiffness_analysis': [],
+            'load_distribution_prediction': [],
+            'structural_effects': []
         }
         
-        max_height = max(self.pier_heights)
-        min_height = min(self.pier_heights)
-        height_diff = max_height - min_height
+        E_pier = 30e9
+        A_pier = 4.0
         
-        # Engineering limits based on bridge length
-        max_reasonable_diff = self.length * 0.002  # L/500
-        critical_diff = self.length * 0.005  # L/200
-        
-        if height_diff > critical_diff:
-            validation['valid'] = False
-            validation['warnings'].append(f"Critical: Height difference {height_diff:.2f}m exceeds {critical_diff:.2f}m (L/200)")
-            validation['warnings'].append("Risk: Some piers may lose contact, causing structural instability")
-        elif height_diff > max_reasonable_diff:
-            validation['warnings'].append(f"Warning: Height difference {height_diff:.2f}m exceeds recommended {max_reasonable_diff:.2f}m (L/500)")
-        
-        # Check for individual pier issues
+        # Calculate stiffness for each pier
+        stiffness_values = []
         for i, height in enumerate(self.pier_heights):
-            if abs(height - min_height) < 0.1 and (max_height - height) > max_reasonable_diff:
-                validation['warnings'].append(f"Pier {i+1} at {height:.1f}m may lose contact (too low)")
-            elif abs(height - max_height) < 0.1 and (height - min_height) > max_reasonable_diff:
-                validation['warnings'].append(f"Pier {i+1} at {height:.1f}m may carry excessive load (too high)")
+            k_vertical = (E_pier * A_pier) / height
+            stiffness_values.append(k_vertical)
+            
+            analysis['stiffness_analysis'].append({
+                'pier_id': i,
+                'height': height,
+                'stiffness': k_vertical,
+                'stiffness_mn': k_vertical / 1e6,
+                'relative_stiffness': k_vertical / min(stiffness_values) if min(stiffness_values) > 0 else 1.0
+            })
         
-        # Recommendations
-        if height_diff > max_reasonable_diff:
-            validation['recommendations'].append("Consider reducing height differences to < L/500")
-            validation['recommendations'].append("Ensure gradual height transitions between adjacent piers")
+        # Predict load distribution based on stiffness
+        total_stiffness = sum(stiffness_values)
+        for i, k in enumerate(stiffness_values):
+            load_share = k / total_stiffness if total_stiffness > 0 else 0
+            analysis['load_distribution_prediction'].append({
+                'pier_id': i,
+                'expected_load_share': load_share,
+                'expected_load_percentage': load_share * 100
+            })
         
-        if len(self.pier_heights) > 2:
-            # Check for sudden height changes
-            for i in range(1, len(self.pier_heights)):
-                height_change = abs(self.pier_heights[i] - self.pier_heights[i-1])
-                if height_change > 1.0:
-                    validation['warnings'].append(f"Sudden height change between piers {i} and {i+1}: {height_change:.1f}m")
+        # Structural effects analysis
+        if len(set(self.pier_heights)) > 1:  # If heights are different
+            analysis['structural_effects'].append({
+                'effect': 'Uneven Load Distribution',
+                'description': 'Different pier heights will cause uneven load distribution',
+                'severity': 'High' if max(self.pier_heights) - min(self.pier_heights) > 2.0 else 'Medium'
+            })
+            
+            analysis['structural_effects'].append({
+                'effect': 'Differential Settlement',
+                'description': 'Height differences may cause differential settlement patterns',
+                'severity': 'Medium'
+            })
         
-        return validation
+        return analysis
+
+    # ...existing code...

@@ -197,11 +197,14 @@ def main():
         fixed_supports = sum(1 for config in support_configs if config['dx'] == 1)
         vertical_supports = sum(1 for config in support_configs if config['dy'] == 1)
         
-        # NEW: Pier Height Configuration
+        # NEW: Pier Height Configuration with Engineering Validation
         st.subheader("📐 支座高度配置")
         
         pier_heights = []
         st.write("**调节各支座高度：**")
+        
+        # Show engineering guidance first
+        st.info("💡 **工程原理**: 支座高度直接影响支座刚度，高度越大刚度越小。不同刚度的支座会导致不均匀的荷载分布。")
         
         for i in range(num_piers):
             pier_name = f"墩台 {i+1}"
@@ -212,7 +215,7 @@ def main():
             else:
                 pier_name += " (中间墩)"
             
-            # Default height based on pier type - engineering realistic values
+            # Engineering realistic default heights
             if i == 0 or i == num_piers - 1:
                 # End piers (abutments) at base height
                 default_height = 8.0
@@ -227,14 +230,27 @@ def main():
                 value=default_height,
                 step=0.5,
                 key=f"pier_height_{i}",
-                help=f"调节{pier_name}的高度，影响结构刚度和力的分布"
+                help=f"调节{pier_name}的高度。高度影响刚度：K = (E×A)/h，其中h为支座高度"
             )
             
             pier_heights.append(pier_height)
         
-        # Show height effects preview with engineering validation
+        # Engineering validation with detailed analysis
         if len(pier_heights) > 1:
             height_diff = max(pier_heights) - min(pier_heights)
+            
+            # Calculate spring stiffness for each pier
+            E_pier = 30e9  # Pa
+            A_pier = 4.0   # m²
+            stiffness_values = []
+            
+            for h in pier_heights:
+                k_vertical = (E_pier * A_pier) / h
+                stiffness_values.append(k_vertical)
+            
+            max_stiffness = max(stiffness_values)
+            min_stiffness = min(stiffness_values)
+            stiffness_ratio = max_stiffness / min_stiffness if min_stiffness > 0 else 1.0
             
             # Engineering validation
             max_reasonable_diff = length * 0.002  # L/500 as reasonable height difference
@@ -252,6 +268,8 @@ def main():
                     if abs(h - min_height) < 0.1 and (max_height - h) > max_reasonable_diff:
                         st.write(f"- 墩台{i+1}: {h:.1f}m (可能悬空)")
                 
+            elif stiffness_ratio > 3.0:
+                st.warning(f"⚠️ 刚度比过大 ({stiffness_ratio:.2f})，会导致荷载分布不均")
             elif height_diff > 1.0:
                 st.warning(f"⚠️ 支座高度差异较大 ({height_diff:.1f}m)，将影响力的分布")
             elif height_diff > 0.2:
@@ -259,8 +277,30 @@ def main():
             else:
                 st.success("✅ 支座高度相对均匀，结构受力较为均匀")
         
+        # Show detailed stiffness analysis
+        st.write("**支座刚度分析:**")
+        stiffness_col1, stiffness_col2 = st.columns(2)
+        
+        with stiffness_col1:
+            st.write("刚度计算公式: K = (E×A)/h")
+            st.write("- E = 30 GPa (混凝土)")
+            st.write("- A = 4 m² (支座面积)")
+            st.write("- h = 支座高度")
+        
+        with stiffness_col2:
+            for i, (h, k) in enumerate(zip(pier_heights, stiffness_values)):
+                st.write(f"墩台{i+1}: {k/1e6:.1f} MN/m (h={h:.1f}m)")
+        
         # Additional engineering guidance
-        st.info("💡 **工程建议**: 支座高度差异应控制在桥长的1/500以内，以确保所有支座都能有效承载")
+        st.info("💡 **工程建议**: 支座高度差异应控制在桥长的1/500以内，刚度比应小于3.0，以确保均匀荷载分布")
+        
+        # Show load distribution prediction
+        if len(stiffness_values) > 1:
+            total_stiffness = sum(stiffness_values)
+            st.write("**预期荷载分布 (基于刚度比):**")
+            for i, k in enumerate(stiffness_values):
+                load_share = k / total_stiffness * 100
+                st.write(f"- 墩台{i+1}: {load_share:.1f}% 总荷载")
         
         if fixed_supports == 0:
             st.error("⚠️ 缺少水平固定支座，结构可能水平滑移")
