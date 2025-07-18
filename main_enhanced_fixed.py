@@ -285,31 +285,34 @@ def main():
         height_col1, height_col2 = st.columns(2)
         
         with height_col1:
-            st.write("强制位移计算: δ = (h - h₀) × 0.0001")
+            st.write("强制位移计算: δ = h - h_ref")
             st.write("- h = 当前墩台高度")
-            st.write("- h₀ = 基准高度 (8.0m)")
+            st.write("- h_ref = 参考高度 (最低墩台的高度)")
             st.write("- δ = 强制位移")
-        
+
         with height_col2:
-            for i, h in enumerate(pier_heights):
-                imposed_disp = (h - 8.0) * 0.0001
-                st.write(f"墩台{i+1}: h={h:.1f}m → δ={imposed_disp:.4f}m")
+            if pier_heights:
+                ref_height = min(pier_heights)
+                st.write(f"参考高度 (h_ref): {ref_height:.3f}m")
+                for i, h in enumerate(pier_heights):
+                    imposed_disp = h - ref_height
+                    st.write(f"墩台{i+1}: h={h:.3f}m → δ={imposed_disp:.3f}m")
         
         # Additional engineering guidance
         st.info("💡 **工程建议**: 支座高度差异应控制在桥长的1/500以内，高度差异会产生强制位移，影响内力分布")
         
         # Show imposed displacement effects
         if len(pier_heights) > 1:
-            ref_height = 8.0  # Reference height
+            ref_height = min(pier_heights)
             st.write("**强制位移效应:**")
             for i, h in enumerate(pier_heights):
-                imposed_disp = (h - ref_height) * 0.0001
+                imposed_disp = h - ref_height
                 if imposed_disp > 0:
-                    st.write(f"- 墩台{i+1}: 向上位移 {imposed_disp:.4f}m")
+                    st.write(f"- 墩台{i+1}: 向上位移 {imposed_disp:.3f}m")
                 elif imposed_disp < 0:
-                    st.write(f"- 墩台{i+1}: 向下位移 {abs(imposed_disp):.4f}m")
+                    st.write(f"- 墩台{i+1}: 向下位移 {abs(imposed_disp):.3f}m")
                 else:
-                    st.write(f"- 墩台{i+1}: 无强制位移 (基准高度)")
+                    st.write(f"- 墩台{i+1}: 无强制位移 (参考高度)")
         
         if fixed_supports == 0:
             st.error("⚠️ 缺少水平固定支座，结构可能水平滑移")

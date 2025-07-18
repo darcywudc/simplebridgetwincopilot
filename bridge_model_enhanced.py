@@ -606,7 +606,7 @@ class BridgeModelXara:
                 'moments_j': element_moments_j,  # End moments for accurate plotting
                 'shears': element_shears,
                 'reactions': support_reactions,  # NEW: Support reactions
-                'max_displacement': max(abs(d) for d in node_displacements),
+                'max_displacement': min(node_displacements) if node_displacements else 0,
                 'max_moment': max(abs(m) for m in element_moments) if element_moments else 0,
                 'max_shear': max(abs(s) for s in element_shears) if element_shears else 0,
                 'max_reaction_vertical': max(abs(r['Fy']) for r in support_reactions) if support_reactions else 0,
