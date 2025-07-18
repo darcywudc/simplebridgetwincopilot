@@ -148,10 +148,15 @@ class BridgeModelXara:
         
         for pier_idx, pier_pos in enumerate(self.pier_positions):
             pier_x = pier_pos * self.length
-            pier_height = self.pier_heights[pier_idx] if pier_idx < len(self.pier_heights) else 8.0
+            # 默认墩台高度（所有支座在同一水平面）
+            base_pier_height = self.pier_heights[pier_idx] if pier_idx < len(self.pier_heights) else 8.0
             
             # Generate individual bearings for this pier
             for bearing_idx in range(self.bearings_per_pier):
+                # 支座编号系统：纵向编号(墩台) + 横向编号(支座)
+                bearing_longitudinal_id = pier_idx + 1  # 墩台编号(1,2,3,4...)
+                bearing_transverse_id = bearing_idx + 1  # 横向编号(1,2,3...)
+                
                 # Calculate transverse position of bearing
                 if self.bearings_per_pier == 1:
                     y_offset = 0.0  # Single bearing at centerline
@@ -161,24 +166,41 @@ class BridgeModelXara:
                     total_width = (self.bearings_per_pier - 1) * spacing
                     y_offset = -total_width/2 + bearing_idx * spacing
                 
+                # 支座标识符：墩台编号-横向编号
+                bearing_key = f"{bearing_longitudinal_id}-{bearing_transverse_id}"
+                
                 # Check for individual bearing configuration
-                bearing_key = f"pier_{pier_idx}_bearing_{bearing_idx}"
                 individual_config = self.individual_bearing_config.get(bearing_key, {})
                 
-                # Individual bearing height (default to pier height + small variation)
-                bearing_height = individual_config.get('height', pier_height + np.random.normal(0, 0.002))
+                # 支座高度配置：
+                # 1. 基本参数：默认高度差为0（同一水平面）
+                # 2. 最终高度：base_pier_height + height_offset
+                height_offset = individual_config.get('height_offset', 0.0)  # 默认0表示同一水平面
+                final_height = base_pier_height + height_offset
                 
                 bearing_info = {
                     'pier_index': pier_idx,
                     'bearing_index': bearing_idx,
+                    'longitudinal_id': bearing_longitudinal_id,  # 纵向编号
+                    'transverse_id': bearing_transverse_id,      # 横向编号
+                    'bearing_id': bearing_key,                   # 支座标识符
                     'global_id': len(bearings),
                     'pier_x': pier_x,
                     'pier_y': y_offset,
-                    'height': bearing_height,
+                    'base_height': base_pier_height,             # 基准高度
+                    'height_offset': height_offset,              # 高度偏移（默认0）
+                    'height': final_height,                      # 最终高度
                     'support_type': individual_config.get('support_type', self.support_types[pier_idx]),
                     'stiffness': individual_config.get('stiffness', None),
                     'damping': individual_config.get('damping', 0.0),
-                    'bearing_key': bearing_key
+                    'bearing_key': bearing_key,
+                    # 支座参数信息
+                    'parameters': {
+                        'material': individual_config.get('material', 'default'),
+                        'size': individual_config.get('size', 'standard'),
+                        'type': individual_config.get('bearing_type', 'elastomeric'),
+                        'load_capacity': individual_config.get('load_capacity', None)
+                    }
                 }
                 
                 bearings.append(bearing_info)
@@ -1289,16 +1311,16 @@ class BridgeModelXara:
         self.time_series_id += 1
         self.load_pattern_id += 1
     
-    def configure_individual_bearing(self, pier_index, bearing_index, **kwargs):
+    def configure_individual_bearing(self, pier_id, bearing_id, **kwargs):
         """
-        Configure individual bearing properties
+        Configure individual bearing properties using pier-bearing ID system
         
         Args:
-            pier_index: Index of the pier (0-based)
-            bearing_index: Index of the bearing within the pier (0-based)
-            **kwargs: Bearing properties (height, support_type, stiffness, damping, etc.)
+            pier_id: Pier longitudinal ID (1, 2, 3, 4...)
+            bearing_id: Bearing transverse ID (1, 2, 3...)
+            **kwargs: Bearing properties (height_offset, support_type, stiffness, damping, etc.)
         """
-        bearing_key = f"pier_{pier_index}_bearing_{bearing_index}"
+        bearing_key = f"{pier_id}-{bearing_id}"
         if bearing_key not in self.individual_bearing_config:
             self.individual_bearing_config[bearing_key] = {}
         
@@ -1306,31 +1328,63 @@ class BridgeModelXara:
         
         # Update existing bearing if already generated
         for bearing in self.individual_bearings:
-            if bearing['bearing_key'] == bearing_key:
+            if bearing['bearing_id'] == bearing_key:
+                # Update height if height_offset is provided
+                if 'height_offset' in kwargs:
+                    bearing['height_offset'] = kwargs['height_offset']
+                    bearing['height'] = bearing['base_height'] + kwargs['height_offset']
+                
+                # Update other properties
                 bearing.update(kwargs)
                 break
         
-        print(f"DEBUG: Configured bearing {bearing_key} with properties: {kwargs}")
+        print(f"DEBUG: 配置支座 {bearing_key} 属性: {kwargs}")
         return True
     
-    def get_individual_bearing_info(self, pier_index=None, bearing_index=None):
+    def configure_bearing_height_offset(self, pier_id, bearing_id, height_offset):
         """
-        Get information about individual bearings
+        Configure bearing height offset (0 means same level as pier base)
         
         Args:
-            pier_index: Optional pier index to filter
-            bearing_index: Optional bearing index to filter
+            pier_id: Pier longitudinal ID (1, 2, 3, 4...)
+            bearing_id: Bearing transverse ID (1, 2, 3...)
+            height_offset: Height offset in meters (0 = same level, positive = higher)
+        """
+        return self.configure_individual_bearing(pier_id, bearing_id, height_offset=height_offset)
+    
+    def configure_pier_bearings_height_offset(self, pier_id, height_offsets):
+        """
+        Configure all bearings height offsets for a pier
+        
+        Args:
+            pier_id: Pier longitudinal ID (1, 2, 3, 4...)
+            height_offsets: List of height offsets for each bearing [offset1, offset2, ...]
+        """
+        for bearing_idx, offset in enumerate(height_offsets):
+            bearing_id = bearing_idx + 1  # Convert to 1-based ID
+            self.configure_bearing_height_offset(pier_id, bearing_id, offset)
+        
+        print(f"DEBUG: 配置墩台 {pier_id} 所有支座高度偏移: {height_offsets}")
+        return True
+    
+    def get_individual_bearing_info(self, pier_id=None, bearing_id=None):
+        """
+        Get information about individual bearings using pier-bearing ID system
+        
+        Args:
+            pier_id: Optional pier longitudinal ID (1, 2, 3, 4...)
+            bearing_id: Optional bearing transverse ID (1, 2, 3...)
             
         Returns:
             List of bearing information dictionaries
         """
-        if pier_index is not None and bearing_index is not None:
+        if pier_id is not None and bearing_id is not None:
             # Get specific bearing
-            bearing_key = f"pier_{pier_index}_bearing_{bearing_index}"
-            return [b for b in self.individual_bearings if b['bearing_key'] == bearing_key]
-        elif pier_index is not None:
+            bearing_key = f"{pier_id}-{bearing_id}"
+            return [b for b in self.individual_bearings if b['bearing_id'] == bearing_key]
+        elif pier_id is not None:
             # Get all bearings for a pier
-            return [b for b in self.individual_bearings if b['pier_index'] == pier_index]
+            return [b for b in self.individual_bearings if b['longitudinal_id'] == pier_id]
         else:
             # Get all bearings
             return self.individual_bearings
@@ -1346,39 +1400,39 @@ class BridgeModelXara:
         
         for bearing in self.individual_bearings:
             summary_data.append({
-                '墩台编号': bearing['pier_index'] + 1,
-                '支座编号': bearing['bearing_index'] + 1,
-                '全局ID': bearing['global_id'],
+                '支座编号': bearing['bearing_id'],
+                '墩台编号': bearing['longitudinal_id'],
+                '横向编号': bearing['transverse_id'],
                 '纵向位置 (m)': f"{bearing['pier_x']:.2f}",
                 '横向位置 (m)': f"{bearing['pier_y']:.2f}",
-                '支座高度 (m)': f"{bearing['height']:.4f}",
+                '基准高度 (m)': f"{bearing['base_height']:.4f}",
+                '高度偏移 (mm)': f"{bearing['height_offset']*1000:.1f}",
+                '最终高度 (m)': f"{bearing['height']:.4f}",
                 '支座类型': bearing['support_type']['type'],
-                '刚度 (kN/m)': f"{bearing.get('stiffness', 'Default'):.0f}" if bearing.get('stiffness') else 'Default',
-                '阻尼 (%)': f"{bearing.get('damping', 0.0):.1f}"
+                '支座型式': bearing['parameters']['type'],
+                '材质': bearing['parameters']['material'],
+                '规格': bearing['parameters']['size']
             })
         
         return pd.DataFrame(summary_data)
     
-    def set_bearing_heights_with_variation(self, pier_index, base_height, variation_std=0.002):
+    def set_bearing_heights_with_variation(self, pier_id, base_height_offset=0.0, variation_std=0.002):
         """
-        Set bearing heights for a pier with random variation
+        Set bearing height offsets for a pier with random variation
         
         Args:
-            pier_index: Index of the pier
-            base_height: Base height for all bearings
+            pier_id: Pier longitudinal ID (1, 2, 3, 4...)
+            base_height_offset: Base height offset for all bearings (default 0.0 = same level)
             variation_std: Standard deviation of height variation in meters
         """
-        pier_bearings = self.get_individual_bearing_info(pier_index=pier_index)
+        pier_bearings = self.get_individual_bearing_info(pier_id=pier_id)
         
         for bearing in pier_bearings:
-            bearing_idx = bearing['bearing_index']
+            bearing_transverse_id = bearing['transverse_id']
             height_variation = np.random.normal(0, variation_std)
-            new_height = base_height + height_variation
+            new_height_offset = base_height_offset + height_variation
             
-            self.configure_individual_bearing(
-                pier_index, bearing_idx, 
-                height=new_height
-            )
+            self.configure_bearing_height_offset(pier_id, bearing_transverse_id, new_height_offset)
         
-        print(f"DEBUG: Set heights for pier {pier_index+1} bearings with base={base_height:.4f}m, std={variation_std:.4f}m")
+        print(f"DEBUG: 设置墩台 {pier_id} 支座高度偏移 基准={base_height_offset*1000:.1f}mm, 变化±{variation_std*1000:.1f}mm")
         return True
