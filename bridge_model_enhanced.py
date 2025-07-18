@@ -20,7 +20,8 @@ class BridgeModelXara:
     def __init__(self, length=60.0, num_elements=30, E=30e9, section_height=1.5, 
                  section_width=1.0, density=2400, num_spans=3, pier_start_position=0.0, 
                  bearings_per_pier=2, bridge_width=15.0, support_types=None, 
-                 beam_segments=None, custom_materials=None, pier_heights=None):
+                 beam_segments=None, custom_materials=None, pier_heights=None,
+                 individual_bearing_config=None):
         """
         Initialize enhanced continuous beam bridge model with configurable supports and beams
         
@@ -39,6 +40,7 @@ class BridgeModelXara:
             beam_segments: List of beam segment configurations
             custom_materials: Dictionary of custom material properties
             pier_heights: List of pier heights in meters (default: None for automatic calculation)
+            individual_bearing_config: Dictionary for individual bearing configuration
         """
         self.length = length
         self.num_elements = num_elements
@@ -62,6 +64,12 @@ class BridgeModelXara:
         
         # NEW: Pier heights configuration
         self.pier_heights = pier_heights or self._default_pier_heights()
+        
+        # NEW: Individual bearing configuration for precise control
+        self.individual_bearing_config = individual_bearing_config or {}
+        
+        # Individual bearings list - each bearing is a separate entity
+        self.individual_bearings = []
         
         # Calculate section properties
         self.A = section_height * section_width  # Cross-sectional area
@@ -93,6 +101,9 @@ class BridgeModelXara:
         
         # Create initial model structure
         self._setup_bridge_geometry()
+        
+        # Generate individual bearings configuration
+        self.individual_bearings = self._generate_individual_bearings()
     
     def _default_support_types(self):
         """Generate default support type configuration"""
@@ -130,6 +141,49 @@ class BridgeModelXara:
                 base_height + 0.015,   # 8.015m (高15mm = 1.5cm)
                 base_height + 0.003    # 8.003m (高3mm)
             ]
+    
+    def _generate_individual_bearings(self):
+        """Generate individual bearing configurations for each pier"""
+        bearings = []
+        
+        for pier_idx, pier_pos in enumerate(self.pier_positions):
+            pier_x = pier_pos * self.length
+            pier_height = self.pier_heights[pier_idx] if pier_idx < len(self.pier_heights) else 8.0
+            
+            # Generate individual bearings for this pier
+            for bearing_idx in range(self.bearings_per_pier):
+                # Calculate transverse position of bearing
+                if self.bearings_per_pier == 1:
+                    y_offset = 0.0  # Single bearing at centerline
+                else:
+                    # Multiple bearings distributed across bridge width
+                    spacing = self.bearing_spacing
+                    total_width = (self.bearings_per_pier - 1) * spacing
+                    y_offset = -total_width/2 + bearing_idx * spacing
+                
+                # Check for individual bearing configuration
+                bearing_key = f"pier_{pier_idx}_bearing_{bearing_idx}"
+                individual_config = self.individual_bearing_config.get(bearing_key, {})
+                
+                # Individual bearing height (default to pier height + small variation)
+                bearing_height = individual_config.get('height', pier_height + np.random.normal(0, 0.002))
+                
+                bearing_info = {
+                    'pier_index': pier_idx,
+                    'bearing_index': bearing_idx,
+                    'global_id': len(bearings),
+                    'pier_x': pier_x,
+                    'pier_y': y_offset,
+                    'height': bearing_height,
+                    'support_type': individual_config.get('support_type', self.support_types[pier_idx]),
+                    'stiffness': individual_config.get('stiffness', None),
+                    'damping': individual_config.get('damping', 0.0),
+                    'bearing_key': bearing_key
+                }
+                
+                bearings.append(bearing_info)
+        
+        return bearings
     
     def _default_beam_segments(self):
         """Generate default beam segment configuration"""
@@ -239,81 +293,82 @@ class BridgeModelXara:
         self._create_pier_supports()
     
     def _create_pier_supports(self):
-        """Create pier supports using imposed displacement to model pier height effects"""
-        print(f"DEBUG: Creating pier supports for {len(self.pier_positions)} piers using imposed displacement")
+        """Create pier supports using individual bearing configuration"""
+        print(f"DEBUG: Creating individual bearing supports for {len(self.individual_bearings)} bearings")
         
         # 清除现有的pier支座数据，避免重复
         self.piers = []
         
-        # 获取基准高度（最低的墩台高度）
-        reference_height = min(self.pier_heights) if self.pier_heights else 8.0
+        # 获取所有支座的基准高度（最低的支座高度）
+        all_bearing_heights = [bearing['height'] for bearing in self.individual_bearings]
+        reference_height = min(all_bearing_heights) if all_bearing_heights else 8.0
         
-        # 墩台高度效应的正确理解：
-        # 墩台高度差（毫米到厘米级）直接作为强制位移
-        # 不需要缩放系数，高度差就是强制位移
+        # 按墩台分组处理支座
+        piers_bearings = {}
+        for bearing in self.individual_bearings:
+            pier_idx = bearing['pier_index']
+            if pier_idx not in piers_bearings:
+                piers_bearings[pier_idx] = []
+            piers_bearings[pier_idx].append(bearing)
         
-        for i, pier_pos in enumerate(self.pier_positions):
-            # Find the closest node to pier position
+        # 为每个墩台创建支座
+        for pier_idx, bearings in piers_bearings.items():
+            pier_pos = self.pier_positions[pier_idx]
             pier_x = pier_pos * self.length
+            
+            # 找到最接近的主梁节点
             node_spacing = self.length / self.num_elements
-            node_id = int(round(pier_x / node_spacing)) + 1  # OpenSees 1-based
-            node_id = max(1, min(node_id, len(self.nodes)))
+            main_node_id = int(round(pier_x / node_spacing)) + 1
+            main_node_id = max(1, min(main_node_id, len(self.nodes)))
             
-            # 获取墩台高度
-            pier_height = self.pier_heights[i] if i < len(self.pier_heights) else 8.0
+            # 计算墩台的平均高度和位移
+            avg_height = np.mean([b['height'] for b in bearings])
+            avg_displacement = avg_height - reference_height
             
-            # 计算强制位移：高度差直接等于强制位移
-            height_difference = pier_height - reference_height
-            imposed_displacement = height_difference  # 直接相等，无需缩放
+            print(f"DEBUG: Pier {pier_idx+1} has {len(bearings)} bearings")
+            print(f"DEBUG: Average height: {avg_height:.4f}m, displacement: {avg_displacement:.4f}m")
             
-            print(f"DEBUG: Creating support for pier {i+1} at position {pier_x:.1f}m")
-            print(f"DEBUG: Node: {node_id}, Height: {pier_height:.1f}m")
-            print(f"DEBUG: Imposed displacement: {imposed_displacement:.4f}m")
+            # 获取支座配置（使用第一个支座的配置作为墩台配置）
+            support_config = bearings[0]['support_type']
             
-            # 获取支座配置
-            support_config = self.support_types[i]
-            
-            # 施加约束
+            # 对于主梁节点，施加约束（代表整个墩台的约束）
             if support_config['type'] == 'fixed_pin':
-                # 固定铰接: 水平固定, 竖向固定, 转动自由
-                self.model.fix(node_id, 1, 1, 0)  # 固定x和y方向，z自由
+                self.model.fix(main_node_id, 1, 1, 0)
                 constraint_type = 'Fixed Pin'
             elif support_config['type'] == 'roller':
-                # 滑动支座: 水平自由, 竖向固定, 转动自由
-                self.model.fix(node_id, 0, 1, 0)  # 固定y方向，x和z自由
+                self.model.fix(main_node_id, 0, 1, 0)
                 constraint_type = 'Roller'
             elif support_config['type'] == 'fixed':
-                # 固定支座: 水平固定, 竖向固定, 转动固定
-                self.model.fix(node_id, 1, 1, 1)  # 固定所有方向
+                self.model.fix(main_node_id, 1, 1, 1)
                 constraint_type = 'Fixed'
             else:
-                # 自定义约束
                 dx = support_config['dx']
                 dy = support_config['dy']
                 rz = support_config['rz']
-                self.model.fix(node_id, dx, dy, rz)
+                self.model.fix(main_node_id, dx, dy, rz)
                 constraint_type = f'Custom (dx={dx}, dy={dy}, rz={rz})'
             
-            print(f"DEBUG: Applied {constraint_type} to pier {i+1}")
+            print(f"DEBUG: Applied {constraint_type} to main node {main_node_id}")
             
-            # 创建新的pier信息
+            # 创建墩台信息（包含所有支座的信息）
             pier_info = {
-                'id': i,  # 确保有id键
-                'pier_id': i,  # 同时保留pier_id键以兼容现有代码
-                'node': node_id,
+                'id': pier_idx,
+                'pier_id': pier_idx,
+                'node': main_node_id,
                 'position': pier_pos,
                 'x_coord': pier_x,
-                'height': pier_height,
-                'imposed_displacement': imposed_displacement,
+                'height': avg_height,
+                'imposed_displacement': avg_displacement,
                 'support_config': support_config,
                 'constraint_type': constraint_type,
-                'type': self._get_pier_type(i),
-                'bearings_count': self.bearings_per_pier
+                'type': self._get_pier_type(pier_idx),
+                'bearings_count': len(bearings),
+                'individual_bearings': bearings  # 新增：包含所有独立支座信息
             }
             self.piers.append(pier_info)
         
-        print(f"DEBUG: Created {len(self.piers)} pier supports with imposed displacement")
-        print(f"DEBUG: Height effects handled by imposed displacement boundary conditions")
+        print(f"DEBUG: Created {len(self.piers)} pier supports with {len(self.individual_bearings)} individual bearings")
+        print(f"DEBUG: Individual bearing configuration enabled")
     
     def _add_self_weight(self):
         """Add self-weight to the model as distributed load"""
@@ -1233,3 +1288,97 @@ class BridgeModelXara:
         
         self.time_series_id += 1
         self.load_pattern_id += 1
+    
+    def configure_individual_bearing(self, pier_index, bearing_index, **kwargs):
+        """
+        Configure individual bearing properties
+        
+        Args:
+            pier_index: Index of the pier (0-based)
+            bearing_index: Index of the bearing within the pier (0-based)
+            **kwargs: Bearing properties (height, support_type, stiffness, damping, etc.)
+        """
+        bearing_key = f"pier_{pier_index}_bearing_{bearing_index}"
+        if bearing_key not in self.individual_bearing_config:
+            self.individual_bearing_config[bearing_key] = {}
+        
+        self.individual_bearing_config[bearing_key].update(kwargs)
+        
+        # Update existing bearing if already generated
+        for bearing in self.individual_bearings:
+            if bearing['bearing_key'] == bearing_key:
+                bearing.update(kwargs)
+                break
+        
+        print(f"DEBUG: Configured bearing {bearing_key} with properties: {kwargs}")
+        return True
+    
+    def get_individual_bearing_info(self, pier_index=None, bearing_index=None):
+        """
+        Get information about individual bearings
+        
+        Args:
+            pier_index: Optional pier index to filter
+            bearing_index: Optional bearing index to filter
+            
+        Returns:
+            List of bearing information dictionaries
+        """
+        if pier_index is not None and bearing_index is not None:
+            # Get specific bearing
+            bearing_key = f"pier_{pier_index}_bearing_{bearing_index}"
+            return [b for b in self.individual_bearings if b['bearing_key'] == bearing_key]
+        elif pier_index is not None:
+            # Get all bearings for a pier
+            return [b for b in self.individual_bearings if b['pier_index'] == pier_index]
+        else:
+            # Get all bearings
+            return self.individual_bearings
+    
+    def get_individual_bearing_summary(self):
+        """
+        Generate a summary table of individual bearing configurations
+        
+        Returns:
+            pandas.DataFrame: Summary of all individual bearings
+        """
+        summary_data = []
+        
+        for bearing in self.individual_bearings:
+            summary_data.append({
+                '墩台编号': bearing['pier_index'] + 1,
+                '支座编号': bearing['bearing_index'] + 1,
+                '全局ID': bearing['global_id'],
+                '纵向位置 (m)': f"{bearing['pier_x']:.2f}",
+                '横向位置 (m)': f"{bearing['pier_y']:.2f}",
+                '支座高度 (m)': f"{bearing['height']:.4f}",
+                '支座类型': bearing['support_type']['type'],
+                '刚度 (kN/m)': f"{bearing.get('stiffness', 'Default'):.0f}" if bearing.get('stiffness') else 'Default',
+                '阻尼 (%)': f"{bearing.get('damping', 0.0):.1f}"
+            })
+        
+        return pd.DataFrame(summary_data)
+    
+    def set_bearing_heights_with_variation(self, pier_index, base_height, variation_std=0.002):
+        """
+        Set bearing heights for a pier with random variation
+        
+        Args:
+            pier_index: Index of the pier
+            base_height: Base height for all bearings
+            variation_std: Standard deviation of height variation in meters
+        """
+        pier_bearings = self.get_individual_bearing_info(pier_index=pier_index)
+        
+        for bearing in pier_bearings:
+            bearing_idx = bearing['bearing_index']
+            height_variation = np.random.normal(0, variation_std)
+            new_height = base_height + height_variation
+            
+            self.configure_individual_bearing(
+                pier_index, bearing_idx, 
+                height=new_height
+            )
+        
+        print(f"DEBUG: Set heights for pier {pier_index+1} bearings with base={base_height:.4f}m, std={variation_std:.4f}m")
+        return True
