@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from bridge_model_enhanced import BridgeModelXara
-from bridge_model import BridgeModel
 from visualization_enhanced import BridgeVisualizer
 import logging
 
@@ -33,29 +32,27 @@ def main():
     )
     
     # Header
-    st.title("🌉 桥梁结构分析系统")
+    st.title("🌉 桥梁有限元分析系统")
     st.markdown("""
-    **专业桥梁有限元分析** | 支持梁刚度、支座刚度、墩台高度配置
+    **专业OpenSees有限元分析引擎** | 基于Euler-Bernoulli梁理论的精确计算
     
-    ✨ **主要功能**:
-    - 🎯 **梁刚度配置**: 可调节弹性模量 (0.5×-2.0×标准值)
-    - 🔧 **支座刚度配置**: 每个支座可选择Fixed Pin或Roller
-    - 📐 **墩台高度配置**: 1mm精度高度调节
-    - 📊 **结构分析**: 弯矩图、剪力图、支座反力分析
+    ✨ **核心特性**:
+    - 🎯 **纯FEM分析**: 基于OpenSees/xara专业有限元引擎
+    - 🔧 **梁刚度配置**: 可调节弹性模量 (0.5×-2.0×标准值)
+    - 📐 **支座类型配置**: 每个支座可选择Fixed Pin或Roller
+    - 🏗️ **墩台高度配置**: 1mm精度高度调节，强制位移模拟
+    - 📊 **精确内力计算**: eleForce()提取弯矩、剪力、支座反力
+    
+    > 🔬 **计算原理**: 采用elasticBeamColumn单元，3DOF/节点，基于虚功原理求解
     """)
     
     # Sidebar Configuration
     with st.sidebar:
         st.header("⚙️ 结构参数配置")
         
-        # Analysis Engine Selection
+        # Analysis Engine Info
         st.subheader("🚀 分析引擎")
-        use_xara = st.radio(
-            "选择分析引擎:",
-            [True, False],
-            format_func=lambda x: "🎯 xara/OpenSees (专业)" if x else "⚡ Simple FEA (快速)",
-            index=0
-        )
+        st.info("🎯 **OpenSees/xara 专业有限元分析引擎**\n\n基于Euler-Bernoulli梁单元的精确有限元计算")
         
         st.divider()
         
@@ -262,40 +259,25 @@ def main():
         st.success(f"**梁刚度**: {beam_stiffness_multiplier:.1f}×")
         st.info(f"**支座配置**: {support_summary}")
     
-    # Create bridge model
-    def create_bridge_model(_use_xara, _length, _num_elements, _E, _height, _width, 
+    # Create bridge model using OpenSees FEM engine
+    def create_bridge_model(_length, _num_elements, _E, _height, _width, 
                            _num_spans, _pier_start, _bearings_per_pier, _bridge_width, 
                            _density, _support_configs, _pier_heights):
-        """Create bridge model with current configuration"""
-        if _use_xara:
-            return BridgeModelXara(
-                length=_length,
-                num_elements=_num_elements,
-                E=_E,
-                section_height=_height,
-                section_width=_width,
-                density=_density,
-                num_spans=_num_spans,
-                pier_start_position=_pier_start,
-                bearings_per_pier=_bearings_per_pier,
-                bridge_width=_bridge_width,
-                support_types=_support_configs,
-                pier_heights=_pier_heights
-            )
-        else:
-            simple_bridge = BridgeModel(
-                length=_length,
-                num_elements=_num_elements,
-                E=_E,
-                section_height=_height,
-                section_width=_width
-            )
-            simple_bridge.num_spans = _num_spans
-            simple_bridge.bridge_width = _bridge_width
-            simple_bridge.density = _density
-            simple_bridge.bearings_per_pier = _bearings_per_pier
-            simple_bridge.pier_heights = _pier_heights
-            return simple_bridge
+        """Create bridge model with OpenSees FEM analysis"""
+        return BridgeModelXara(
+            length=_length,
+            num_elements=_num_elements,
+            E=_E,
+            section_height=_height,
+            section_width=_width,
+            density=_density,
+            num_spans=_num_spans,
+            pier_start_position=_pier_start,
+            bearings_per_pier=_bearings_per_pier,
+            bridge_width=_bridge_width,
+            support_types=_support_configs,
+            pier_heights=_pier_heights
+        )
     
     # Create model with configuration tracking
     config_key = f"config_{beam_stiffness_multiplier}_{hash(tuple(tuple(c.items()) for c in support_configs))}_{hash(tuple(pier_heights))}_{length}_{num_elements}"
@@ -303,7 +285,7 @@ def main():
     if 'config_params' not in st.session_state or st.session_state.config_params != config_key:
         with st.spinner("创建桥梁模型..."):
             bridge = create_bridge_model(
-                use_xara, length, num_elements, E, section_height, section_width,
+                length, num_elements, E, section_height, section_width,
                 num_spans, pier_start_position, bearings_per_pier, bridge_width,
                 density, support_configs, pier_heights
             )

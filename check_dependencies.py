@@ -15,8 +15,6 @@ def check_files():
     required_files = [
         "main_enhanced_fixed.py",
         "bridge_model_enhanced.py", 
-        "bridge_model.py",
-        "simple_fea.py",
         "visualization_enhanced.py",
         "requirements.txt"
     ]
@@ -103,8 +101,6 @@ def check_imports():
     
     test_imports = [
         ("bridge_model_enhanced", "BridgeModelXara"),
-        ("bridge_model", "BridgeModel"),
-        ("simple_fea", "SimplifiedFEA"),
         ("visualization_enhanced", "BridgeVisualizer")
     ]
     

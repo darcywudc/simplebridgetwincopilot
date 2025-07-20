@@ -1,23 +1,25 @@
-# 桥梁结构分析系统 - 生产版本
+# 桥梁有限元分析系统 - 纯FEM版本
 
 [![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://share.streamlit.io)
 
-一个专业的连续梁桥数字孪生系统，支持可配置梁刚度、支座类型、墩台高度的精确结构分析。
+专业的连续梁桥有限元分析系统，基于OpenSees/xara引擎的精确结构计算。
 
 ## 🌟 核心特性
 
-- **🎯 双引擎分析**: 支持 xara/OpenSees 专业分析和简化 FEA 快速分析
+- **🎯 纯FEM分析**: 基于OpenSees/xara专业有限元引擎，消除所有物理简化
+- **🔬 精确计算**: elasticBeamColumn单元，3DOF/节点，eleForce()内力提取
 - **🔧 个性化配置**: 每个支座可独立选择 Fixed Pin 或 Roller 类型
-- **📐 精密控制**: 1mm精度的墩台高度调节，模拟实际施工误差
+- **📐 精密控制**: 1mm精度的墩台高度调节，强制位移模拟施工误差
 - **🏗️ 梁刚度调节**: 0.5×-2.0×弹性模量连续可调
-- **📊 专业分析**: 基于OpenSees有限元的弯矩图、剪力图、支座反力分析
+- **📊 专业分析**: 基于虚功原理的弯矩图、剪力图、支座反力分析
 - **🌐 Web界面**: 现代化Streamlit界面，实时参数配置和结果展示
 
 ## 🚀 快速开始
 
 ### 环境要求
 - Python 3.8+
-- 主要依赖：Streamlit, NumPy, Pandas, Plotly, xara
+- **必需依赖**：xara (OpenSees Python接口)
+- 其他依赖：Streamlit, NumPy, Pandas, Plotly
 
 ### 安装与运行
 
@@ -47,9 +49,7 @@ streamlit run main_enhanced_fixed.py
 ### 核心文件
 ```
 ├── main_enhanced_fixed.py      # 🌐 主程序 - Streamlit Web界面
-├── bridge_model_enhanced.py    # 🎯 专业分析引擎 - OpenSees/xara
-├── bridge_model.py            # ⚡ 简化分析引擎 - 快速计算
-├── simple_fea.py             # 🔧 自制有限元核心
+├── bridge_model_enhanced.py    # 🎯 FEM分析引擎 - OpenSees/xara
 ├── visualization_enhanced.py  # 📊 图表可视化模块
 ├── requirements.txt           # 📦 Python依赖清单
 ├── check_dependencies.py      # ✅ 环境检查工具
@@ -58,8 +58,8 @@ streamlit run main_enhanced_fixed.py
 
 ### 技术架构
 - **前端**: Streamlit Web框架
-- **分析引擎**: OpenSees (专业) + 自制FEA (快速)
-- **可视化**: Plotly交互式图表 + Matplotlib
+- **分析引擎**: OpenSees/xara 纯有限元计算
+- **可视化**: Plotly交互式图表
 - **计算核心**: NumPy, SciPy科学计算栈
 
 ## 💡 主要功能
@@ -89,21 +89,32 @@ streamlit run main_enhanced_fixed.py
 
 ## 🔬 技术细节
 
-### 有限元计算
+### 有限元理论基础
 - **单元类型**: `elasticBeamColumn` - 欧拉-伯努利梁单元
 - **节点自由度**: 3 DOF/节点 (dx, dy, rz)
-- **求解方法**: 静力分析，LoadControl积分器
+- **求解方法**: 静力分析，LoadControl积分器，基于虚功原理
 - **内力提取**: `eleForce()` 获取 [N1, V1, M1, N2, V2, M2]
 
+### 刚度矩阵组装
+```python
+# 单元刚度矩阵 (局部坐标系)
+K_local = [[EA/L, 0, 0, -EA/L, 0, 0],
+           [0, 12EI/L³, 6EI/L², 0, -12EI/L³, 6EI/L²],
+           [0, 6EI/L², 4EI/L, 0, -6EI/L², 2EI/L],
+           [-EA/L, 0, 0, EA/L, 0, 0],
+           [0, -12EI/L³, -6EI/L², 0, 12EI/L³, -6EI/L²],
+           [0, 6EI/L², 2EI/L, 0, -6EI/L², 4EI/L]]
+```
+
 ### 墩台高度效应
-- **物理原理**: 高度差 = 强制位移
+- **物理原理**: 高度差直接作为强制位移边界条件
 - **实现方法**: OpenSees `sp()` 命令施加强制位移
-- **精度**: 毫米级高度差的结构响应
+- **精度**: 毫米级高度差的结构响应，无物理近似
 
 ### 支座反力计算
 ```python
-model.reactions()  # 必须先调用
-reaction = model.nodeReaction(node_id)
+model.reactions()  # 激活反力计算
+reaction = model.nodeReaction(node_id)  # [Fx, Fy, Mz]
 ```
 
 ## 📋 使用指南
