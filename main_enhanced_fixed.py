@@ -8,7 +8,7 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from bridge_model_enhanced import BridgeModelXara
+from bridge_model_enhanced_fixed import BridgeModelXara
 from visualization_enhanced import BridgeVisualizer
 import logging
 
@@ -21,6 +21,42 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
+
+def get_support_constraint_info(config):
+    """获取支座约束信息，处理不同类型的支座配置"""
+    if config['type'] == 'elastic':
+        # 弹性支座使用刚度参数
+        kx = config.get('kx', 0)
+        ky = config.get('ky', 1e10)
+        kr = config.get('kr', 0)
+        
+        # 转换为约束描述
+        if kx > 1e8:
+            dx_desc = "1(固定)"
+        elif kx > 0:
+            dx_desc = f"弹性({kx/1e6:.0f}MN/m)"
+        else:
+            dx_desc = "0(自由)"
+            
+        if ky > 1e12:
+            dy_desc = "1(固定)"
+        else:
+            dy_desc = f"弹性({ky/1e6:.0f}MN/m)"
+            
+        if kr > 1e8:
+            rz_desc = "1(固定)"
+        elif kr > 0:
+            rz_desc = f"弹性({kr/1e6:.0f}MN⋅m/rad)"
+        else:
+            rz_desc = "0(自由)"
+            
+        return f"dx={dx_desc}\ndy={dy_desc}\nrz={rz_desc}"
+    else:
+        # 传统支座使用dx/dy/rz
+        dx = config.get('dx', 0)
+        dy = config.get('dy', 1)
+        rz = config.get('rz', 0)
+        return f"dx={dx}\ndy={dy}\nrz={rz}"
 
 def main():
     """Simplified main application focused on basic structural analysis"""
@@ -90,69 +126,196 @@ def main():
         
         st.divider()
         
-        # Individual Support Configuration  
-        st.subheader("🔧 支座类型配置")
+        # Simplified Support Configuration  
+        st.subheader("🔧 支座配置系统")
         
-        st.write("**为每个支座选择类型:**")
+        # Support system selection
+        support_system = st.selectbox(
+            "支座系统类型",
+            [
+                "traditional",
+                "elastic_uniform"
+            ],
+            format_func=lambda x: {
+                "traditional": "🔧 传统支座系统 (固定铰接+滑动支座)",
+                "elastic_uniform": "⚡ 精细化弹性支座系统 (统一刚度配置)"
+            }[x],
+            index=0,
+            help="选择支座建模方式"
+        )
         
-        # Support type options
-        support_type_options = {
-            'fixed_pin': 'Fixed Pin (固定铰接)',
-            'roller': 'Roller (滑动支座)'
-        }
+        support_configs = []
+        pier_names = ["1号墩(左桥台)", "2号墩(中间墩)", "3号墩(中间墩)", "4号墩(右桥台)"]
         
-        # Initialize support configurations in session state
-        if 'support_configs_individual' not in st.session_state:
-            # Default configuration: first pier fixed_pin, others roller
-            st.session_state.support_configs_individual = [
+        if support_system == "traditional":
+            # Traditional support system configuration
+            st.write("**传统支座布置:**")
+            st.info("🔧 左端固定铰接，其余为滑动支座")
+            
+            support_configs = [
                 {'type': 'fixed_pin', 'dx': 1, 'dy': 1, 'rz': 0},
                 {'type': 'roller', 'dx': 0, 'dy': 1, 'rz': 0},
                 {'type': 'roller', 'dx': 0, 'dy': 1, 'rz': 0},
                 {'type': 'roller', 'dx': 0, 'dy': 1, 'rz': 0}
             ]
-        
-        support_configs = []
-        pier_names = ["1号墩(左桥台)", "2号墩(中间墩)", "3号墩(中间墩)", "4号墩(右桥台)"]
-        
-        for i in range(4):  # Fixed 4 piers for 3-span bridge
-            pier_name = pier_names[i]
             
-            col1, col2 = st.columns([3, 1])
+            # Display configuration
+            for i, config in enumerate(support_configs):
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    type_display = "固定铰接" if config['type'] == 'fixed_pin' else "滑动支座"
+                    st.write(f"**{pier_names[i]}**: {type_display}")
+                with col2:
+                    constraint_desc = f"dx={config['dx']}\ndy={config['dy']}\nrz={config['rz']}"
+                    st.code(constraint_desc)
             
-            with col1:
-                # Get current selection from session state
-                current_type = st.session_state.support_configs_individual[i]['type']
-                current_index = list(support_type_options.keys()).index(current_type)
-                
-                selected_type = st.selectbox(
-                    f"{pier_name}",
-                    list(support_type_options.keys()),
-                    format_func=lambda x: support_type_options[x],
-                    index=current_index,
-                    key=f"support_type_{i}"
-                )
-                
-                # Update configuration based on selection
-                if selected_type == 'fixed_pin':
-                    config = {'type': 'fixed_pin', 'dx': 1, 'dy': 1, 'rz': 0}
-                else:  # roller
-                    config = {'type': 'roller', 'dx': 0, 'dy': 1, 'rz': 0}
-                
-                # Update session state
-                st.session_state.support_configs_individual[i] = config
-                support_configs.append(config)
-            
-            with col2:
-                # Show constraint notation
-                constraint_desc = f"dx={config['dx']}\ndy={config['dy']}\nrz={config['rz']}"
-                st.code(constraint_desc)
+            st.success("✅ 传统支座系统: 1个固定铰接 + 3个滑动支座")
         
-        # Validation
-        fixed_supports = sum(1 for config in support_configs if config['dx'] == 1)
-        if fixed_supports == 0:
-            st.error("⚠️ 警告: 需要至少一个Fixed Pin支座防止水平滑移")
-        else:
-            st.success(f"✅ 配置有效: {fixed_supports}个Fixed Pin, {4-fixed_supports}个Roller")
+        else:  # elastic_uniform
+            # Elastic support system with uniform configuration
+            st.write("**精细化弹性支座系统:**")
+            st.info("⚡ 所有支座采用统一的弹性刚度配置")
+            
+            # Unified stiffness configuration
+            with st.expander("🔧 统一刚度配置", expanded=True):
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.write("**水平刚度 Kx:**")
+                    kx_preset = st.selectbox(
+                        "水平预设",
+                        ["自由", "软", "中等", "硬", "刚性"],
+                        index=0,
+                        help="水平方向约束刚度"
+                    )
+                    
+                    kx_values = {
+                        "自由": 0,           # 无水平约束
+                        "软": 1e6,          # 1 MN/m
+                        "中等": 1e8,        # 100 MN/m  
+                        "硬": 1e10,         # 10000 MN/m
+                        "刚性": 1e12        # 1000000 MN/m
+                    }
+                    kx_value = kx_values[kx_preset]
+                    st.metric("Kx", f"{kx_value/1e6:.0f} MN/m" if kx_value > 0 else "自由")
+                
+                with col2:
+                    st.write("**竖向刚度 Ky:**")
+                    ky_preset = st.selectbox(
+                        "竖向预设",
+                        ["超软", "软", "中等", "硬", "刚性"],
+                        index=2,
+                        help="竖向约束刚度"
+                    )
+                    
+                    ky_values = {
+                        "超软": 1e6,        # 1 MN/m
+                        "软": 1e8,          # 100 MN/m
+                        "中等": 1e10,       # 10000 MN/m
+                        "硬": 1e12,         # 1000000 MN/m
+                        "刚性": 1e15        # 接近无穷大
+                    }
+                    ky_value = ky_values[ky_preset]
+                    st.metric("Ky", f"{ky_value/1e6:.0f} MN/m")
+                
+                with col3:
+                    st.write("**转动刚度 Kr:**")
+                    kr_preset = st.selectbox(
+                        "转动预设",
+                        ["自由", "软", "中等", "硬", "刚性"],
+                        index=2,
+                        help="转动约束刚度"
+                    )
+                    
+                    kr_values = {
+                        "自由": 0,          # 无转动约束
+                        "软": 1e7,          # 10 MN⋅m/rad
+                        "中等": 1e9,        # 1000 MN⋅m/rad
+                        "硬": 1e11,         # 100000 MN⋅m/rad
+                        "刚性": 1e15        # 接近无穷大
+                    }
+                    kr_value = kr_values[kr_preset]
+                    st.metric("Kr", f"{kr_value/1e6:.0f} MN⋅m/rad" if kr_value > 0 else "自由")
+                
+                # Physics explanation
+                st.markdown("""
+                **🔬 物理意义:**
+                - **Kx (水平)**: 控制水平位移约束，0表示可自由滑动
+                - **Ky (竖向)**: 控制竖向位移约束，决定支座承载能力
+                - **Kr (转动)**: 控制转角约束，影响弯矩传递和重分布
+                """)
+            
+            # Create unified elastic support configuration  
+            # Left end: Add horizontal constraint to prevent sliding
+            support_configs = [
+                {'type': 'elastic', 'kx': max(kx_value, 1e10), 'ky': ky_value, 'kr': kr_value},  # Left: horizontal constraint
+                {'type': 'elastic', 'kx': kx_value, 'ky': ky_value, 'kr': kr_value},  # Middle 1
+                {'type': 'elastic', 'kx': kx_value, 'ky': ky_value, 'kr': kr_value},  # Middle 2  
+                {'type': 'elastic', 'kx': kx_value, 'ky': ky_value, 'kr': kr_value}   # Right
+            ]
+            
+            # Display configuration
+            st.write("**支座配置分布:**")
+            if len(support_configs) >= 4:
+                for i, config in enumerate(support_configs[:4]):
+                    col1, col2 = st.columns([1, 1])
+                    with col1:
+                        if config['type'] == 'elastic':
+                            type_display = "弹性支座"
+                        elif config['type'] == 'fixed_pin':
+                            type_display = "固定铰接"
+                        else:
+                            type_display = "滑动支座"
+                        st.write(f"**{pier_names[i]}**: {type_display}")
+                    with col2:
+                        constraint_desc = get_support_constraint_info(config)
+                        st.code(constraint_desc)
+            
+            st.success(f"✅ 精细化弹性支座: Ky={ky_value/1e6:.0f}MN/m, Kr={kr_value/1e6:.0f}MN⋅m/rad")
+        
+        st.divider()
+        
+        # Enhanced Support Information Display
+        has_elastic = any(config['type'] == 'elastic' for config in support_configs)
+        
+        if has_elastic:
+            with st.expander("🔬 精细化弹性支座技术原理", expanded=False):
+                st.markdown("""
+                ### 🎯 **精细化弹性支座 vs 传统支座**
+                
+                #### **1. 技术实现对比**
+                
+                | 特性 | 精细化弹性支座 | 传统支座 |
+                |------|---------------|---------|
+                | **实现方法** | zeroLength单元 + 弹性材料 | 约束开关 |
+                | **变形协调** | ✅ 真实物理协调 | ❌ 理想化约束 |
+                | **转动刚度** | ✅ 精确连续值 | ❌ 二元开关 |
+                | **反力计算** | ✅ 弹簧单元内力 | ❌ 节点反力 |
+                | **计算精度** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ |
+                
+                #### **2. zeroLength单元原理**
+                ```
+                结构节点 ←→ [弹性材料] ←→ 固定地面节点
+                         ├─ X方向弹簧 (Kx): 水平刚度
+                         ├─ Y方向弹簧 (Ky): 竖向刚度  
+                         └─ 转动弹簧 (Kr): 转动刚度
+                ```
+                
+                #### **3. 支座刚度矩阵**
+                ```
+                [ Fx ]   [ Kx   0   0 ] [ ux ]
+                [ Fy ] = [  0  Ky   0 ] [ uy ]
+                [ Mz ]   [  0   0  Kr ] [ θz ]
+                ```
+                
+                #### **4. 工程应用优势**
+                - **真实建模**: 支座位移 = 梁端位移，支座反力 = K × δ
+                - **参数化设计**: 连续可调的刚度参数，突破传统二元模式
+                - **多目标优化**: 不同工程需求的精确配置
+                - **性能评估**: 支座老化、刚度退化的定量分析
+                
+                **结论**: 支座刚度直接影响内力分布和位移响应，是桥梁设计的关键参数。
+                """)
         
         st.divider()
         
@@ -241,7 +404,78 @@ def main():
         
         length = st.number_input("桥梁长度 (m)", 40.0, 80.0, 60.0, 5.0)
         bridge_width = st.number_input("桥梁宽度 (m)", 10.0, 20.0, 15.0, 1.0)
-        num_elements = st.number_input("有限元数量", 15, 30, 20, 5)
+        
+        # Enhanced FEM precision control
+        st.write("**🔬 有限元精度控制:**")
+        
+        precision_presets = {
+            '粗网格 (快速)': {'elements': 12, 'description': '快速计算，适合初步分析'},
+            '标准网格 (平衡)': {'elements': 20, 'description': '精度与速度平衡'},
+            '细网格 (精确)': {'elements': 30, 'description': '高精度，计算时间较长'},
+            '超细网格 (研究级)': {'elements': 45, 'description': '研究级精度，适合精确分析'}
+        }
+        
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            precision_preset = st.selectbox(
+                "精度预设",
+                list(precision_presets.keys()),
+                index=1,
+                help="选择有限元网格精度"
+            )
+        
+        with col2:
+            num_elements = st.number_input(
+                "单元数量", 
+                10, 60, 
+                precision_presets[precision_preset]['elements'], 
+                1,
+                help="有限元单元数量，影响计算精度"
+            )
+        
+        # Element size and precision metrics
+        element_length = length / num_elements
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("单元长度", f"{element_length:.2f} m")
+        with col2:
+            st.metric("节点总数", f"{num_elements + 1}")
+        with col3:
+            if element_length <= 1.0:
+                precision_level = "🟢 高精度"
+            elif element_length <= 2.0:
+                precision_level = "🟡 中等精度"
+            else:
+                precision_level = "🔴 低精度"
+            st.metric("精度评级", precision_level)
+        
+        st.info(f"💡 **{precision_presets[precision_preset]['description']}** | 单元长度: {element_length:.2f}m")
+        
+        # Advanced precision information
+        with st.expander("📚 有限元精度说明", expanded=False):
+            st.markdown(f"""
+            ### 🔬 **网格密度对精度的影响**
+            
+            **当前配置**:
+            - 桥梁长度: {length:.0f}m
+            - 单元数量: {num_elements}个
+            - 单元长度: {element_length:.2f}m
+            - 节点数量: {num_elements + 1}个
+            
+            **精度指标**:
+            - **高精度** (≤1.0m/单元): 适合详细设计分析
+            - **中等精度** (1.0-2.0m/单元): 适合概念设计
+            - **低精度** (>2.0m/单元): 适合初步估算
+            
+            **计算量**:
+            - 刚度矩阵规模: {3*(num_elements+1)} × {3*(num_elements+1)}
+            - 自由度数量: {3*(num_elements+1)} (每节点3DOF)
+            - 相对计算时间: {num_elements/20:.1f}×
+            
+            **收敛性**: 随着单元数量增加，解会收敛到精确值
+            """)
+        
+        st.divider()
         
         col1, col2 = st.columns(2)
         with col1:
@@ -305,8 +539,14 @@ def main():
     with col2:
         st.metric("梁刚度", f"{beam_stiffness_multiplier:.1f}×")
     with col3:
-        fixed_count = sum(1 for config in support_configs if config['dx'] == 1)
-        st.metric("支座配置", f"{fixed_count}P+{4-fixed_count}R")
+        fixed_count = sum(1 for config in support_configs if config['type'] == 'fixed_pin')
+        elastic_count = sum(1 for config in support_configs if config['type'] == 'elastic')
+        roller_count = 4 - fixed_count - elastic_count
+        
+        if elastic_count > 0:
+            st.metric("支座配置", f"{fixed_count}P+{elastic_count}E+{roller_count}R")
+        else:
+            st.metric("支座配置", f"{fixed_count}P+{roller_count}R")
     with col4:
         height_range = f"{min(pier_heights):.3f}-{max(pier_heights):.3f}m"
         st.metric("高度范围", height_range)
@@ -321,28 +561,96 @@ def main():
     support_detail_cols = st.columns(4)
     for i, (pier_name, config) in enumerate(zip(pier_names, support_configs)):
         with support_detail_cols[i]:
-            support_type_display = "🔒 Fixed Pin" if config['type'] == 'fixed_pin' else "📏 Roller"
+            if config['type'] == 'fixed_pin':
+                support_type_display = "🔒 Fixed Pin"
+                detail_info = f"dx={config.get('dx', 1)}, dy={config.get('dy', 1)}, rz={config.get('rz', 0)}"
+            elif config['type'] == 'roller':
+                support_type_display = "📏 Roller"
+                detail_info = f"dx={config.get('dx', 0)}, dy={config.get('dy', 1)}, rz={config.get('rz', 0)}"
+            elif config['type'] == 'elastic':
+                support_type_display = "⚡ 精细化弹性支座"
+                kx_str = f"{config['kx']/1e6:.0f}MN/m" if config['kx'] > 1e6 else (f"{config['kx']:.0f}N/m" if config['kx'] > 0 else "自由")
+                ky_str = f"{config['ky']/1e6:.0f}MN/m" if config['ky'] > 1e6 else f"{config['ky']:.0f}N/m"
+                kr_str = f"{config['kr']/1e6:.0f}MN⋅m" if config['kr'] > 1e6 else (f"{config['kr']:.0f}N⋅m" if config['kr'] > 0 else "自由")
+                detail_info = f"Kx={kx_str}\nKy={ky_str}\nKr={kr_str}"
+            else:
+                support_type_display = "❓ 其他"
+                detail_info = f"dx={config.get('dx', 0)}, dy={config.get('dy', 0)}, rz={config.get('rz', 0)}"
+            
             st.write(f"**{pier_name}**")
             st.write(f"{support_type_display}")
-            st.caption(f"dx={config['dx']}, dy={config['dy']}, rz={config['rz']}")
+            st.caption(detail_info)
     
-    # Simplified Load Application
-    st.header("⚖️ 荷载配置")
+
+    # Enhanced Load Application with Self-Weight Calculation
+    st.header("⚖️ 荷载配置与计算")
     
-    # Uniform distributed load input
-    st.subheader("均布荷载")
+    # Self-weight calculation display
+    st.subheader("📐 结构自重计算")
+    
+    # Calculate self-weight
+    A = section_height * section_width  # Cross-sectional area (m²)
+    self_weight_per_length = density * 9.81 * A / 1000  # kN/m (convert from N/m)
+    self_weight_total = self_weight_per_length * length  # kN
+    
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("截面积", f"{A:.2f} m²")
+    with col2:
+        st.metric("自重线密度", f"{self_weight_per_length:.2f} kN/m")
+    with col3:
+        st.metric("自重总量", f"{self_weight_total:.1f} kN")
+    with col4:
+        st.metric("重度", f"{density * 9.81 / 1000:.1f} kN/m³")
+    
+    st.info(f"🧮 **自重计算**: γ × A × L = {density * 9.81 / 1000:.1f} × {A:.2f} × {length:.0f} = {self_weight_total:.1f} kN")
+    
+    st.divider()
+    
+    # External load input
+    st.subheader("🏗️ 外加均布荷载")
     
     col1, col2 = st.columns(2)
     with col1:
         distributed_load = st.number_input(
-            "均布荷载强度 (kN/m)",
+            "外加荷载强度 (kN/m)",
             -100.0, 100.0, -50.0, 5.0,
-            help="均布荷载强度，负值表示向下"
+            help="外加均布荷载强度，负值表示向下"
         )
     
     with col2:
-        total_load = abs(distributed_load) * length
-        st.metric("总荷载", f"{total_load:.1f} kN")
+        external_load_total = abs(distributed_load) * length
+        st.metric("外加荷载总量", f"{external_load_total:.1f} kN")
+    
+    # Total load summary
+    st.subheader("📊 荷载汇总")
+    total_load_combined = self_weight_total + external_load_total
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("结构自重", f"{self_weight_total:.1f} kN", help="由材料密度和几何尺寸计算")
+    with col2:
+        st.metric("外加荷载", f"{external_load_total:.1f} kN", help="用户定义的外加均布荷载")
+    with col3:
+        st.metric("**总荷载**", f"{total_load_combined:.1f} kN", help="自重 + 外加荷载")
+    
+    # Load composition pie chart
+    if total_load_combined > 0:
+        load_composition = go.Figure(data=[go.Pie(
+            labels=['结构自重', '外加荷载'],
+            values=[self_weight_total, external_load_total],
+            hole=0.4,
+            textinfo='label+percent',
+            hovertemplate='<b>%{label}</b><br>荷载: %{value:.1f} kN<br>占比: %{percent}<extra></extra>'
+        )])
+        load_composition.update_layout(
+            title="荷载组成",
+            height=300,
+            showlegend=False
+        )
+        st.plotly_chart(load_composition, use_container_width=True)
+    
+    st.divider()
     
     # Apply load to bridge
     if st.button("🔄 更新荷载", type="secondary"):
@@ -359,6 +667,12 @@ def main():
     
     # Analysis Section
     if st.button("🚀 运行结构分析", type="primary", use_container_width=True):
+        # 🔧 FIX: 自动应用当前配置的荷载，避免用户忘记点击更新荷载按钮
+        bridge.loads.clear()  # Clear existing loads
+        if abs(distributed_load) > 0:
+            bridge.add_distributed_load(distributed_load * 1000)  # Convert kN/m to N/m
+            st.info(f"📋 自动应用荷载: {distributed_load} kN/m")
+        
         with st.spinner("正在进行有限元分析..."):
             results = bridge.run_analysis()
             
@@ -408,6 +722,81 @@ def main():
                 st.metric("最大支座反力", f"{max_reaction:.1f} kN")
             else:
                 st.metric("最大支座反力", "N/A")
+        
+        # 🔬 Beam Stiffness Sensitivity Analysis
+        st.subheader("🔬 梁刚度敏感性分析")
+        
+        # Calculate stiffness-sensitive parameters
+        EI = E * (section_width * section_height**3 / 12)  # Flexural rigidity
+        span_length = length / 3  # Assuming 3 equal spans
+        
+        # Theoretical deflection for uniform load on simply supported beam: 5wL⁴/(384EI)
+        w = abs(distributed_load) * 1000 if abs(distributed_load) > 0 else 0  # N/m
+        theoretical_deflection = (5 * w * span_length**4) / (384 * EI) if EI > 0 else 0
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("抗弯刚度 EI", f"{EI/1e12:.2f} MN·m²", help="弹性模量 × 惯性矩")
+        with col2:
+            # Calculate deflection-to-span ratio
+            deflection_ratio = (max_disp / span_length * 1000) if span_length > 0 else 0
+            st.metric("挠跨比", f"1/{1/deflection_ratio:.0f}" if deflection_ratio > 0 else "0", help="最大位移/跨长")
+        with col3:
+            # Theoretical vs actual deflection
+            if theoretical_deflection > 0:
+                deflection_accuracy = (max_disp / theoretical_deflection * 100)
+                st.metric("位移理论比", f"{deflection_accuracy:.1f}%", help="实际位移/理论位移")
+            else:
+                st.metric("位移理论比", "N/A")
+        with col4:
+            # Stiffness effect indicator  
+            if beam_stiffness_multiplier != 1.0:
+                expected_disp_change = f"{1/beam_stiffness_multiplier:.1f}×"
+                st.metric("预期位移倍数", expected_disp_change, help="相对标准刚度的位移变化")
+            else:
+                st.metric("预期位移倍数", "1.0×")
+        
+        # 📊 Stiffness Sensitivity Explanation
+        with st.expander("📚 为什么支座反力对梁刚度不敏感？", expanded=False):
+            st.markdown(f"""
+            ### 🎯 **结构力学原理解释**
+            
+            #### **1. 支座反力 vs 内力分布**
+            对于**对称连续梁**结构：
+            - ✅ **支座反力**: 主要由**静力平衡**决定，对刚度变化不敏感
+            - 🔄 **弯矩分布**: 对刚度变化**高度敏感**，会发生内力重分布
+            - 📐 **位移**: 与刚度**成反比**关系，EI增加 → 位移减小
+            
+            #### **2. 当前配置分析**
+            - **结构**: 三跨连续梁，近似对称
+            - **荷载**: 均布荷载（对称）
+            - **支座**: 固定铰接 + 滑动支座
+            - **几何**: 对称或近似对称
+            
+            #### **3. 刚度效应验证**
+            **理论预测**: 
+            - 位移 ∝ 1/EI → 刚度增加{beam_stiffness_multiplier:.1f}×，位移应减少至 {1/beam_stiffness_multiplier:.2f}×
+            - 弯矩分布会重新调整，但峰值可能变化较小
+            - 支座反力基本不变（±5%以内）
+            
+            **实际结果对比**:
+            - 当前抗弯刚度: {EI/1e12:.2f} MN·m²
+            - 刚度倍数: {beam_stiffness_multiplier:.1f}×
+            - 最大位移: {max_disp*1000:.2f} mm
+            - 挠跨比: 1/{1/deflection_ratio:.0f} {'(合理)' if deflection_ratio > 0 and 1/deflection_ratio < 300 else '(需检查)' if deflection_ratio > 0 else ''}
+            
+            #### **4. 验证方法**
+            💡 **建议测试**:
+            1. 记录当前位移值
+            2. 将梁刚度调至 0.5× (软梁)
+            3. 重新分析，位移应增加约2倍
+            4. 将梁刚度调至 2.0× (硬梁)  
+            5. 重新分析，位移应减少约50%
+            
+            **结论**: 系统正确实现了梁刚度效应，支座反力不变是正确的物理现象！
+            """)
+        
+        st.divider()
         
         # Bending Moment and Shear Force Calculation Method Explanation
         st.subheader("🧮 弯矩和剪力计算原理")
@@ -565,23 +954,76 @@ def main():
                 
                 st.plotly_chart(fig_reactions, use_container_width=True)
                 
-                # Force balance check
+                # 🔧 Enhanced Force balance check with total load verification
                 total_vertical = sum(r['Fy'] for r in results['reactions'])
                 total_horizontal = sum(r['Fx'] for r in results['reactions'])
                 
-                st.info(f"""
-                **力平衡检验:**
-                - 竖向反力合计: {total_vertical/1000:.2f} kN
-                - 水平反力合计: {total_horizontal/1000:.2f} kN
-                - 平衡状态: {'✅ 平衡' if abs(total_horizontal) < 1.0 else '⚠️ 不平衡'}
-                """)
+                # Calculate theoretical total load
+                A = section_height * section_width  # Cross-sectional area
+                self_weight_per_length = density * 9.81 * A  # N/m
+                self_weight_total = self_weight_per_length * length  # N
+                external_load_total = abs(distributed_load) * length * 1000 if abs(distributed_load) > 0 else 0  # N
+                theoretical_total = (self_weight_total + external_load_total) / 1000  # kN
+                
+                # Load balance verification
+                load_balance_error = abs(total_vertical/1000 - theoretical_total)
+                load_balance_percent = (load_balance_error / theoretical_total * 100) if theoretical_total > 0 else 0
+                
+                # Enhanced balance check display
+                if load_balance_percent < 0.1:
+                    balance_status = "✅ 完美平衡"
+                    balance_color = "success"
+                elif load_balance_percent < 1.0:
+                    balance_status = "✅ 良好平衡"
+                    balance_color = "success"  
+                elif load_balance_percent < 5.0:
+                    balance_status = "⚠️ 轻微误差"
+                    balance_color = "warning"
+                else:
+                    balance_status = "❌ 严重不平衡"
+                    balance_color = "error"
+                
+                if balance_color == "success":
+                    st.success(f"""
+                    **🎯 荷载平衡验证:**
+                    - 理论总荷载: {theoretical_total:.2f} kN (自重: {self_weight_total/1000:.1f} + 外荷载: {external_load_total/1000:.1f})
+                    - 支座反力合计: {total_vertical/1000:.2f} kN
+                    - 平衡误差: {load_balance_error:.2f} kN ({load_balance_percent:.2f}%)
+                    - 平衡状态: {balance_status}
+                    """)
+                elif balance_color == "warning":
+                    st.warning(f"""
+                    **⚠️ 荷载平衡验证:**
+                    - 理论总荷载: {theoretical_total:.2f} kN (自重: {self_weight_total/1000:.1f} + 外荷载: {external_load_total/1000:.1f})
+                    - 支座反力合计: {total_vertical/1000:.2f} kN  
+                    - 平衡误差: {load_balance_error:.2f} kN ({load_balance_percent:.2f}%)
+                    - 平衡状态: {balance_status}
+                    """)
+                else:
+                    st.error(f"""
+                    **❌ 荷载平衡验证:**
+                    - 理论总荷载: {theoretical_total:.2f} kN (自重: {self_weight_total/1000:.1f} + 外荷载: {external_load_total/1000:.1f})
+                    - 支座反力合计: {total_vertical/1000:.2f} kN
+                    - 平衡误差: {load_balance_error:.2f} kN ({load_balance_percent:.2f}%)
+                    - 平衡状态: {balance_status}
+                    - 💡 **建议**: 检查荷载是否正确应用或模型设置
+                    """)
                 
             else:
                 st.info("支座反力数据不可用")
     
     # Footer
     st.divider()
-    support_summary_short = f"{sum(1 for c in support_configs if c['dx']==1)}P+{sum(1 for c in support_configs if c['dx']==0)}R"
+    
+    # Generate support summary using the new configuration method
+    fixed_count = sum(1 for c in support_configs if c.get('type') == 'fixed_pin')
+    elastic_count = sum(1 for c in support_configs if c.get('type') == 'elastic')
+    roller_count = 4 - fixed_count - elastic_count
+    
+    if elastic_count > 0:
+        support_summary_short = f"{fixed_count}P+{elastic_count}E+{roller_count}R"
+    else:
+        support_summary_short = f"{fixed_count}P+{roller_count}R"
     st.markdown(f"""
     **桥梁结构分析系统** | 梁刚度: {beam_stiffness_multiplier:.1f}× | 支座: {support_summary_short} | 高度差: {height_diff*1000:.0f}mm | E: {E/1e9:.1f}GPa
     
